@@ -1,0 +1,35 @@
+name: miws26
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  - pip
+  - tqdm
+  - cython
+  - portaudio      # required by pyaudio
+  - fluidsynth     # required by pyfluidsynth
+
+  - pip:
+    - partitura>=1.9.0
+    - python-rtmidi
+    - SoundFile
+    - fastdtw
+    - python-hiddenmarkov
+    - appdirs
+    - ipympl
+    - ipywidgets
+    - scikit-learn
+    - jupyter
+    - ipython
+    - pandas
+    - matplotlib
+    - numpy
+    - scipy
+    - torch
+    - torchvision
+    - librosa
+    - pyaudio
+    - pyfluidsynth
