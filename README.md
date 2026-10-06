@@ -1,6 +1,6 @@
-# Musical Informatics KV WS2025
+# Musical Informatics KV WS2026
 
-This repository contains materials for the Winter Semester 2024 course on [Musical Informatics](https://www.jku.at/en/institut-fuer-computational-perception/lehre/alle-lehrveranstaltungen/special-topics-musical-informatics).
+This repository contains materials for the Winter Semester 2026 course on [Musical Informatics](https://www.jku.at/en/institut-fuer-computational-perception/lehre/alle-lehrveranstaltungen/special-topics-musical-informatics).
 
 For more information, see the [Moodle page of the course](https://moodle.jku.at/course/view.php?id=39386) (only for registered students).
 
@@ -36,16 +36,16 @@ For more detailed instructions, you can refer to the official [Conda documentati
 To create setup the environment, run the following commands in the terminal:
 
 ```bash
-git clone --recurse-submodules https://github.com/MusicalInformatics/miws25.git
-cd miws25
+git clone --recurse-submodules https://github.com/MusicalInformatics/miws26.git
+cd miws26
 conda env create -f environment.yml
 ```
 
 The command above requires `git` 2.13 or later, if you have an older version of `git`, you can use the following command instead.
 
 ```bash
-git clone --recursive https://github.com/MusicalInformatics/miws25.git
-cd miws25
+git clone --recursive https://github.com/MusicalInformatics/miws26.git
+cd miws26
 conda env create -f environment.yml
 ```
 
