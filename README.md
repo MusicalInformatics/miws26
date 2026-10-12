@@ -31,7 +31,15 @@ To install Miniconda, follow these simple steps:
 
 For more detailed instructions, you can refer to the official [Conda documentation](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html).
 
-### 2. Clone the repository and setup the conda environment
+### 2. Install a C compiler
+
+`pymatchmaker` is compiled during installation, so you need a C compiler:
+
+- **macOS:** `xcode-select --install`
+- **Linux (Debian/Ubuntu):** `sudo apt install build-essential`
+- **Windows:** install the [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the "Desktop development with C++" workload.
+
+### 3. Clone the repository and setup the conda environment
 
 To create setup the environment, run the following commands in the terminal:
 
