@@ -13,22 +13,15 @@ from scipy.interpolate import interp1d
 from partitura.utils.music import frequency_to_midi_pitch, midi_pitch_to_frequency
 from partitura.utils.synth import additive_synthesis, SAMPLE_RATE
 
+# True if pyfluidsynth is installed and can find the FluidSynth library
+# (the same check partitura uses internally)
+from partitura.utils.fluidsynth import HAS_FLUIDSYNTH
+
 import IPython.display as ipd
 from ipywidgets import interactive, fixed
-import shutil, ctypes.util
 
 PATH = os.path.dirname(os.path.realpath(__file__))
 MIDI_PITCH_FREQS = midi_pitch_to_frequency(np.arange(128))
-
-has_exec = shutil.which("fluidsynth") is not None
-has_lib = ctypes.util.find_library("fluidsynth") is not None
-
-if has_exec or has_lib:
-    # print("FluidSynth is installed.")
-    HAS_FLUIDSYNTH = True
-else:
-    # print("FluidSynth not found.")
-    HAS_FLUIDSYNTH = False
 
 class VerticalLineOnClickPlot(object):
     """

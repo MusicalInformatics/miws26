@@ -2,7 +2,7 @@
 
 This repository contains materials for the Winter Semester 2026 course on [Musical Informatics](https://www.jku.at/en/institut-fuer-computational-perception/lehre/alle-lehrveranstaltungen/special-topics-musical-informatics).
 
-For more information, see the [Moodle page of the course](https://moodle.jku.at/course/view.php?id=39386) (only for registered students).
+For more information, see the [Moodle page of the course](https://moodle.jku.at/course/view.php?id=46529) (only for registered students).
 
 ## Setup
 
