@@ -1,3 +1,4 @@
+import io
 import os
 from scipy.io import wavfile
 from scipy.fftpack import fft
@@ -18,6 +19,7 @@ from partitura.utils.synth import additive_synthesis, SAMPLE_RATE
 from partitura.utils.fluidsynth import HAS_FLUIDSYNTH
 
 import IPython.display as ipd
+import ipywidgets as widgets
 from ipywidgets import interactive, fixed
 
 PATH = os.path.dirname(os.path.realpath(__file__))
@@ -51,6 +53,10 @@ class VerticalLineOnClickPlot(object):
             self.ax = ax
         self.ax.plot(x, y, color="navy")
         self.lines: List[plt.Line2D] = []
+        # x values of the lines in the order in which they were added
+        # (to be able to remove the most recently added line)
+        self._line_x_values: List[float] = []
+        # all x values, sorted
         self.x_values: List[float] = []
         self.interp_fun = interp1d(
             x=x,
@@ -77,14 +83,14 @@ class VerticalLineOnClickPlot(object):
     def add_line(self, x_val: float) -> None:
         line = self.ax.axvline(x_val, color="r", linestyle="--")
         self.lines.append(line)
+        self._line_x_values.append(x_val)
         self.x_values.append(x_val)
         self.x_values.sort()
 
     def remove_line(self) -> None:
         if self.lines:
-            self.lines[-1].remove()
-            del self.lines[-1]
-            del self.x_values[-1]
+            self.lines.pop().remove()
+            self.x_values.remove(self._line_x_values.pop())
 
     def update_plot(self) -> None:
         plt.draw()
@@ -180,6 +186,17 @@ def compute_magnitude_spectrogram(
     return spectrogram, freqs
 
 
+def signal_to_wav_bytes(signal: np.ndarray, sample_rate: float) -> bytes:
+    """
+    Encode a float signal (in [-1, 1]) as 16-bit PCM WAV bytes, e.g., to
+    be used as the value of an `ipywidgets.Audio` widget.
+    """
+    pcm = (np.clip(signal, -1, 1) * 32767).astype(np.int16)
+    buffer = io.BytesIO()
+    wavfile.write(buffer, int(sample_rate), pcm)
+    return buffer.getvalue()
+
+
 class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
     def __init__(
         self,
@@ -216,7 +233,14 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
         self.signal_ax = axes[1]
         self.signal = signal
         self.spectrogram = spectrogram
-        self.audio_widget = None
+        # A single audio player that is updated in place (instead of
+        # creating a new player every time the plot changes)
+        self.audio_widget = widgets.Audio(
+            value=b"",
+            format="wav",
+            autoplay=False,
+            loop=False,
+        )
         self.synth_signal = None
         self.time_axis = np.linspace(0, 1, len(signal))
 
@@ -232,7 +256,7 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
             linestyle="--",
             linewidth=3,
         )
-        self.update_plot(display_audio=False)
+        self.update_plot()
 
     def harmonics_dist(self, freq: int) -> Tuple[np.ndarray, np.ndarray]:
         overtones = np.array(self.x_values) / self.fundamental_freq
@@ -247,6 +271,8 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
     def show(self) -> None:
         plt.show()
         self.synthesize()
+        # The audio widget is displayed only once; afterwards its value
+        # is updated in place
         ipd.display(self.audio_widget)
 
     def synthesize(self) -> None:
@@ -258,12 +284,7 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
             weights=weights,
         )
         self.synth_signal = audio_signal
-        self.audio_widget = ipd.Audio(
-            data=audio_signal,
-            rate=SAMPLE_RATE,
-            normalize=False,
-            element_id="audio_display",
-        )
+        self.audio_widget.value = signal_to_wav_bytes(audio_signal, SAMPLE_RATE)
         self.signal_ax.cla()
         self.signal_ax.plot(
             self.signal[1000:2000] / abs(self.signal).max(),
@@ -276,8 +297,6 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
             label="synthesized",
         )
 
-    def update_plot(self, display_audio: bool = True) -> None:
-        plt.draw()
+    def update_plot(self) -> None:
         self.synthesize()
-        if display_audio:
-            ipd.display(self.audio_widget)
+        plt.draw()
