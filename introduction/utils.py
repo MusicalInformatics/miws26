@@ -92,6 +92,10 @@ class VerticalLineOnClickPlot(object):
             self.lines.pop().remove()
             self.x_values.remove(self._line_x_values.pop())
 
+    def clear_lines(self) -> None:
+        while self.lines:
+            self.remove_line()
+
     def update_plot(self) -> None:
         plt.draw()
 
@@ -256,6 +260,44 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
             linestyle="--",
             linewidth=3,
         )
+        # Option to pick N equally spaced components (the fundamental
+        # frequency and its N - 1 first overtones)
+        # Components above the highest frequency of the spectrum (the Nyquist
+        # frequency) carry no information, so they are not drawn.
+        self.max_components = max(int(freqs.max() // self.fundamental_freq), 1)
+        # Logarithmic slider: from 1 (10^0) to 10000 (10^4) components
+        self.n_components_widget = widgets.FloatLogSlider(
+            value=1,
+            base=10,
+            min=0,
+            max=4,
+            step=0.05,
+            description="Components",
+            readout_format=".0f",
+            continuous_update=False,
+            tooltip="Number of equally spaced components (harmonics), "
+            "starting at the fundamental frequency",
+        )
+        self.n_components_widget.observe(self._on_n_components_change, names="value")
+
+        self.update_plot()
+
+    def _on_n_components_change(self, change: dict) -> None:
+        self.set_n_components(int(round(change["new"])))
+
+    def set_n_components(self, n_components: int) -> None:
+        """
+        Use n_components equally spaced components, starting at the
+        fundamental frequency (i.e., the fundamental and its first
+        n_components - 1 overtones). This replaces the lines that have been
+        added so far, and draws one line per component.
+        """
+        # Only components below the Nyquist frequency can be represented
+        n_components = int(np.clip(n_components, 1, self.max_components))
+        self.clear_lines()
+        # The fundamental frequency is always present
+        for n in range(2, n_components + 1):
+            self.add_line(n * self.fundamental_freq)
         self.update_plot()
 
     def harmonics_dist(self, freq: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -271,8 +313,9 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
     def show(self) -> None:
         plt.show()
         self.synthesize()
-        # The audio widget is displayed only once; afterwards its value
+        # The widgets are displayed only once; afterwards the audio widget
         # is updated in place
+        ipd.display(self.n_components_widget)
         ipd.display(self.audio_widget)
 
     def synthesize(self) -> None:
@@ -289,13 +332,14 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
         self.signal_ax.plot(
             self.signal[1000:2000] / abs(self.signal).max(),
             color="firebrick",
-            label="Piano",
+            label="Original signal",
         )
         self.signal_ax.plot(
             audio_signal[1000:2000] / abs(audio_signal).max(),
             color="black",
-            label="synthesized",
+            label="Fourier approximation",
         )
+        self.signal_ax.legend(loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, frameon=False)
 
     def update_plot(self) -> None:
         self.synthesize()
