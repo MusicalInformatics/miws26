@@ -1,6 +1,8 @@
 # Environment for Intel Macs (osx-64). Identical to environment.yml except that
 # numba (and thus llvmlite) is installed from conda-forge, since PyPI has no
-# llvmlite wheels for Intel Macs and building from source fails.
+# llvmlite wheels for Intel Macs and building from source fails. Likewise, the
+# last PyPI torch for Intel Macs (2.2.2) is incompatible with NumPy 2, so
+# pytorch/torchvision come from conda-forge.
 name: miws26
 
 channels:
@@ -14,6 +16,8 @@ dependencies:
   - cython
   - portaudio          # required by pyaudio
   - fluidsynth         # required by pyfluidsynth
+  - pytorch            # PyPI torch for Intel Macs is stuck at 2.2.2 (NumPy 1 only)
+  - torchvision
   - numba              # no llvmlite wheels for Intel Macs on PyPI, so take it from conda-forge
 
   - pip:
@@ -24,8 +28,6 @@ dependencies:
     - matplotlib
     - scikit-learn
     - librosa
-    - torch
-    - torchvision
     - python-rtmidi
     - SoundFile
     - fastdtw
