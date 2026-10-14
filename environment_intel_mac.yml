@@ -1,0 +1,42 @@
+# Environment for Intel Macs (osx-64). Identical to environment.yml except that
+# numba (and thus llvmlite) is installed from conda-forge, since PyPI has no
+# llvmlite wheels for Intel Macs and building from source fails.
+name: miws26
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12        # pymatchmaker requires python <3.13
+  - pip
+  - tqdm
+  - cython
+  - portaudio          # required by pyaudio
+  - fluidsynth         # required by pyfluidsynth
+  - numba              # no llvmlite wheels for Intel Macs on PyPI, so take it from conda-forge
+
+  - pip:
+    - partitura @ git+https://github.com/CPJKU/partitura.git@develop
+    - numpy
+    - scipy
+    - pandas
+    - matplotlib
+    - scikit-learn
+    - librosa
+    - torch
+    - torchvision
+    - python-rtmidi
+    - SoundFile
+    - fastdtw
+    - python-hiddenmarkov
+    - appdirs
+    - ipympl
+    - ipywidgets
+    - jupyter
+    - ipython
+    - pyaudio
+    - pyfluidsynth
+    - parangonar[accelerated]
+    - pymatchmaker @ git+https://github.com/pymatchmaker/matchmaker.git@develop
+    - synctoolbox

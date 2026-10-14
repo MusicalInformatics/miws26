@@ -59,6 +59,12 @@ conda env create -f environment.yml
 
 (you can check your `git` version by typing `git version` in the terminal).
 
+**Intel Macs:** PyPI has no `llvmlite` wheels for Intel Macs (needed by `numba`), so use the dedicated environment file instead:
+
+```bash
+conda env create -f environment_intel_mac.yml
+```
+
 To activate the environment in the terminal:
 
 ```bash

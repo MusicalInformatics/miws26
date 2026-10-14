@@ -35,5 +35,5 @@ dependencies:
     - pyaudio
     - pyfluidsynth
     - parangonar[accelerated]
-    - pymatchmaker @ git+https://github.com/pymatchmaker/matchmaker.git@to_numpy2  # TODO: switch to @develop once PR #71 (numpy>=2) is merged
+    - pymatchmaker @ git+https://github.com/pymatchmaker/matchmaker.git@develop
     - synctoolbox
