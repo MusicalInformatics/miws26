@@ -25,6 +25,9 @@ from ipywidgets import interactive, fixed
 PATH = os.path.dirname(os.path.realpath(__file__))
 MIDI_PITCH_FREQS = midi_pitch_to_frequency(np.arange(128))
 
+# Maximum number of components in the interactive tone analyzer
+MAX_COMPONENTS = 200
+
 class VerticalLineOnClickPlot(object):
     """
     Interactive plot
@@ -260,23 +263,22 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
             linestyle="--",
             linewidth=3,
         )
-        # Option to pick N equally spaced components (the fundamental
-        # frequency and its N - 1 first overtones)
-        # Components above the highest frequency of the spectrum (the Nyquist
-        # frequency) carry no information, so they are not drawn.
-        self.max_components = max(int(freqs.max() // self.fundamental_freq), 1)
-        # Logarithmic slider: from 1 (10^0) to 10000 (10^4) components
+        # Option to pick N equally spaced components between the fundamental
+        # frequency and the highest frequency in the spectrum (the Nyquist
+        # frequency)
+        self.max_freq = freqs.max()
+        # Logarithmic slider: from 1 (10^0) to 200 components
         self.n_components_widget = widgets.FloatLogSlider(
             value=1,
             base=10,
             min=0,
-            max=4,
+            max=np.log10(MAX_COMPONENTS),
             step=0.05,
             description="Components",
             readout_format=".0f",
             continuous_update=False,
-            tooltip="Number of equally spaced components (harmonics), "
-            "starting at the fundamental frequency",
+            tooltip="Number of equally spaced components between the "
+            "fundamental frequency and the Nyquist frequency",
         )
         self.n_components_widget.observe(self._on_n_components_change, names="value")
 
@@ -287,17 +289,18 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
 
     def set_n_components(self, n_components: int) -> None:
         """
-        Use n_components equally spaced components, starting at the
-        fundamental frequency (i.e., the fundamental and its first
-        n_components - 1 overtones). This replaces the lines that have been
-        added so far, and draws one line per component.
+        Use n_components components, equally spaced between the fundamental
+        frequency and the Nyquist frequency (the highest frequency in the
+        spectrum). With one component, only the fundamental frequency is used.
+        This replaces the lines that have been added so far, and draws one
+        line per component (the fundamental has its own line).
         """
-        # Only components below the Nyquist frequency can be represented
-        n_components = int(np.clip(n_components, 1, self.max_components))
+        n_components = int(np.clip(n_components, 1, MAX_COMPONENTS))
         self.clear_lines()
+        components = np.linspace(self.fundamental_freq, self.max_freq, n_components)
         # The fundamental frequency is always present
-        for n in range(2, n_components + 1):
-            self.add_line(n * self.fundamental_freq)
+        for freq in components[1:]:
+            self.add_line(freq)
         self.update_plot()
 
     def harmonics_dist(self, freq: int) -> Tuple[np.ndarray, np.ndarray]:
