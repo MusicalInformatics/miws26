@@ -41,4 +41,8 @@ dependencies:
     - pyfluidsynth
     - parangonar[accelerated]
     - pymatchmaker @ git+https://github.com/pymatchmaker/matchmaker.git@develop
-    - synctoolbox
+    # synctoolbox from GitHub: the PyPI release (1.4.2) does not include feature.visualization
+    - synctoolbox @ git+https://github.com/groupmm/synctoolbox.git
+    - libtsm
+    - libsoni
+    - yt-dlp
