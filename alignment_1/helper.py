@@ -7,6 +7,7 @@ loading audio recordings
 import glob
 import os
 import subprocess
+import sys
 from shutil import make_archive
 from typing import List, Optional, Tuple, Union
 
@@ -620,3 +621,36 @@ def load_audio(
                 return librosa.load(fetch_or_upload(local_path), sr=sample_rate)[0]
         return librosa.load(path, sr=sample_rate)[0]
     return librosa.load(fetch_or_upload(local_path), sr=sample_rate)[0]
+
+
+def fluidsynth_works(timeout: float = 120) -> bool:
+    """
+    Check whether FluidSynth can be used to render audio with partitura.
+
+    FluidSynth can be installed, but still crash the whole Python session when
+    it loads the soundfont (e.g., because of conflicting libraries). Since a
+    crash would kill the notebook, we run the check in a separate process.
+
+    Parameters
+    ----------
+    timeout : float
+        Maximum time (in seconds) to wait for the check.
+
+    Returns
+    -------
+    works : bool
+        True if FluidSynth can load partitura's default soundfont.
+    """
+    code = (
+        "from partitura.utils.fluidsynth import HAS_FLUIDSYNTH, DEFAULT_SOUNDFONT\n"
+        "assert HAS_FLUIDSYNTH\n"
+        "from fluidsynth import Synth\n"
+        "Synth().sfload(DEFAULT_SOUNDFONT)\n"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, timeout=timeout
+        )
+    except Exception:
+        return False
+    return result.returncode == 0

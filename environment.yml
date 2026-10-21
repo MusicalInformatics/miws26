@@ -11,6 +11,8 @@ dependencies:
   - cython
   - portaudio          # required by pyaudio
   - fluidsynth         # required by pyfluidsynth
+  - pytorch            # from conda-forge (not PyPI): the PyPI wheels bundle their own OpenMP library,
+  - torchvision        # which crashes FluidSynth (it also uses conda's OpenMP) when partitura imports torch
 
   - pip:
     - partitura @ git+https://github.com/CPJKU/partitura.git@develop
@@ -21,8 +23,6 @@ dependencies:
     - scikit-learn
     - librosa
     - numba
-    - torch
-    - torchvision
     - python-rtmidi
     - SoundFile
     - fastdtw
