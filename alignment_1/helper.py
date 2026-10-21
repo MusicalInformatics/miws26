@@ -5,15 +5,18 @@ Helper methods for plotting and visualizing alignments, and for downloading and
 loading audio recordings
 """
 import glob
+import io
 import os
 import subprocess
 import sys
 from shutil import make_archive
-from typing import List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+import ipywidgets as widgets
 import numpy as np
 import partitura as pt
 from matplotlib import lines
+from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
 from partitura.io.exportparangonada import alignment_dicts_to_array
 from partitura.performance import PerformanceLike
@@ -654,3 +657,35 @@ def fluidsynth_works(timeout: float = 120) -> bool:
     except Exception:
         return False
     return result.returncode == 0
+
+
+def figure_to_png(fig: Figure) -> bytes:
+    """Encode a matplotlib figure as PNG (bytes)"""
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", dpi=100, bbox_inches="tight")
+    return buffer.getvalue()
+
+
+def interactive_figure(
+    make_figure: Callable[..., Figure],
+    controls: Dict[str, widgets.Widget],
+) -> widgets.Image:
+    """
+    Image widget that shows `make_figure(**values)`, where `values` are the
+    values of the `controls` (a dictionary of widgets). When a control changes,
+    the image is replaced (instead of drawing a new output).
+
+    The figures should be created without pyplot (e.g., with
+    `matplotlib.figure.Figure`), so that they do not depend on (or pile up
+    with) the matplotlib backend that is active in the notebook.
+    """
+    image = widgets.Image(format="png")
+
+    def update(change: Any = None) -> None:
+        values = {name: control.value for name, control in controls.items()}
+        image.value = figure_to_png(make_figure(**values))
+
+    for control in controls.values():
+        control.observe(update, names="value")
+    update()
+    return image
