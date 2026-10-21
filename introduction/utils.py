@@ -1,10 +1,14 @@
 import io
 import os
+import subprocess
+from base64 import b64decode
+from math import gcd
 from scipy.io import wavfile
+from scipy.signal import resample_poly
 from scipy.fftpack import fft
 import numpy as np
 
-from typing import Any, Tuple, List
+from typing import Any, Tuple, List, Optional
 
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
@@ -139,6 +143,158 @@ def load_audio(filename: str) -> Tuple[np.ndarray, float]:
     return signal, sample_rate
 
 
+_COLAB_RECORD_JS = """
+const sleep = time => new Promise(resolve => setTimeout(resolve, time));
+const toDataURL = blob => new Promise(resolve => {
+  const reader = new FileReader();
+  reader.onloadend = e => resolve(e.srcElement.result);
+  reader.readAsDataURL(blob);
+});
+var record = time => new Promise(async resolve => {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const recorder = new MediaRecorder(stream);
+  const chunks = [];
+  recorder.ondataavailable = e => chunks.push(e.data);
+  recorder.onstop = async () => {
+    stream.getTracks().forEach(track => track.stop());
+    resolve(await toDataURL(new Blob(chunks)));
+  };
+  recorder.start();
+  await sleep(time);
+  recorder.stop();
+});
+"""
+
+
+def _record_audio_local(duration: float, sample_rate: int) -> np.ndarray:
+    """Record from the default microphone of this computer using PyAudio"""
+    try:
+        import pyaudio
+    except ImportError as error:
+        raise ImportError(
+            "Recording audio requires the package `pyaudio` (pip install pyaudio)"
+        ) from error
+
+    chunk = 1024
+    audio = pyaudio.PyAudio()
+    try:
+        try:
+            rate = sample_rate
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=rate,
+                input=True,
+                frames_per_buffer=chunk,
+            )
+        except OSError:
+            # The microphone does not support the requested sample rate:
+            # record with its default sample rate and resample afterwards
+            rate = int(audio.get_default_input_device_info()["defaultSampleRate"])
+            stream = audio.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=rate,
+                input=True,
+                frames_per_buffer=chunk,
+            )
+        n_chunks = int(np.ceil(rate * duration / chunk))
+        frames = [
+            stream.read(chunk, exception_on_overflow=False) for _ in range(n_chunks)
+        ]
+        stream.stop_stream()
+        stream.close()
+    finally:
+        audio.terminate()
+
+    signal = np.frombuffer(b"".join(frames), dtype=np.int16).astype(np.float64) / 32768
+    signal = signal[: int(rate * duration)]
+    if rate != sample_rate:
+        divisor = gcd(rate, sample_rate)
+        signal = resample_poly(signal, sample_rate // divisor, rate // divisor)
+    return signal
+
+
+def _record_audio_colab(duration: float, sample_rate: int) -> np.ndarray:
+    """Record from the microphone of the browser in Google Colab"""
+    from google.colab import output
+
+    ipd.display(ipd.Javascript(_COLAB_RECORD_JS))
+    # Colab will ask for permission to use the microphone
+    data_url = output.eval_js(f"record({int(duration * 1000)})")
+    with open("recording.bin", "wb") as f:
+        f.write(b64decode(data_url.split(",")[1]))
+    # The browser records in a compressed format (webm, ogg, mp4), so we need
+    # to convert it to a wav file
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            "recording.bin",
+            "-ar",
+            str(sample_rate),
+            "-ac",
+            "1",
+            "recording.wav",
+        ],
+        check=True,
+    )
+    _, signal = wavfile.read("recording.wav")
+    return signal.astype(np.float64) / 32768
+
+
+def record_audio(
+    duration: float = 2.0,
+    sample_rate: int = 44100,
+) -> Tuple[np.ndarray, int]:
+    """
+    Record audio from the microphone.
+
+    Locally, this uses the default microphone of the computer (your operating
+    system may ask for permission to use it). In Google Colab, this uses the
+    microphone of your browser (the browser will ask for permission).
+
+    Parameters
+    ----------
+    duration : float
+        Duration of the recording in seconds.
+    sample_rate : int
+        Sample rate of the recording (in Hz).
+
+    Returns
+    -------
+    signal : np.ndarray
+        The recording as a 1D array with values between -1 and 1
+        (without DC offset).
+    sample_rate : int
+        Sample rate of the recording.
+    """
+    try:
+        import google.colab  # noqa: F401
+
+        in_colab = True
+    except ImportError:
+        in_colab = False
+
+    print(f"Recording {duration:g} seconds... make some sound!")
+    if in_colab:
+        signal = _record_audio_colab(duration, sample_rate)
+    else:
+        signal = _record_audio_local(duration, sample_rate)
+    print("Done!")
+
+    signal = signal - signal.mean()
+    if np.abs(signal).max() < 1e-3:
+        print(
+            "Warning: (almost) no sound was recorded. Check that your microphone "
+            "works and that you gave permission to use it."
+        )
+    return signal, sample_rate
+
+
 def compute_magnitude_spectrogram(
     signal: np.ndarray,
     sample_rate: float,
@@ -212,7 +368,16 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
         window_size: int = 1024,
         hop_size: int = 256,
         figsize: Tuple[int, int] = (8, 6),
+        waveform_start: int = 1000,
+        fundamental_freq: Optional[float] = None,
     ) -> None:
+        """
+        waveform_start: index of the first sample of the (1000 samples long)
+        part of the signal that is compared to the synthesized signal.
+        fundamental_freq: fundamental frequency (in Hz) of the signal. By
+        default, it is the strongest peak of the spectrum, rounded to the
+        closest MIDI pitch.
+        """
         spectrogram, freqs = compute_magnitude_spectrogram(
             signal=signal,
             sample_rate=sample_rate,
@@ -239,6 +404,7 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
         )
         self.signal_ax = axes[1]
         self.signal = signal
+        self.waveform_slice = slice(waveform_start, waveform_start + 1000)
         self.spectrogram = spectrogram
         # A single audio player that is updated in place (instead of
         # creating a new player every time the plot changes)
@@ -251,10 +417,14 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
         self.synth_signal = None
         self.time_axis = np.linspace(0, 1, len(signal))
 
-        self.fundamental_freq_raw = freqs[spectrogram_dist.argmax()]
-        self.fundamental_freq = MIDI_PITCH_FREQS[
-            frequency_to_midi_pitch(self.fundamental_freq_raw)
-        ]
+        if fundamental_freq is None:
+            self.fundamental_freq_raw = freqs[spectrogram_dist.argmax()]
+            self.fundamental_freq = MIDI_PITCH_FREQS[
+                frequency_to_midi_pitch(self.fundamental_freq_raw)
+            ]
+        else:
+            self.fundamental_freq_raw = float(fundamental_freq)
+            self.fundamental_freq = float(fundamental_freq)
         self.x_values.append(self.fundamental_freq)
 
         line = self.ax.axvline(
@@ -333,12 +503,12 @@ class InteractiveToneAnalyzer(VerticalLineOnClickPlot):
         self.audio_widget.value = signal_to_wav_bytes(audio_signal, SAMPLE_RATE)
         self.signal_ax.cla()
         self.signal_ax.plot(
-            self.signal[1000:2000] / abs(self.signal).max(),
+            self.signal[self.waveform_slice] / abs(self.signal).max(),
             color="firebrick",
             label="Original signal",
         )
         self.signal_ax.plot(
-            audio_signal[1000:2000] / abs(audio_signal).max(),
+            audio_signal[self.waveform_slice] / abs(audio_signal).max(),
             color="black",
             label="Fourier approximation",
         )
