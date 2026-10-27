@@ -10,7 +10,7 @@ channels:
   - defaults
 
 dependencies:
-  - python=3.12        # pymatchmaker requires python <3.13
+  - python=3.12        # pymatchmaker requires python <3.14
   - pip
   - tqdm
   - cython
@@ -40,7 +40,7 @@ dependencies:
     - pyaudio
     - pyfluidsynth
     - parangonar[accelerated]
-    - pymatchmaker==0.4.0
+    - pymatchmaker>=0.4.0
     # synctoolbox from GitHub: the PyPI release (1.4.2) does not include feature.visualization
     - synctoolbox @ git+https://github.com/groupmm/synctoolbox.git
     - libtsm
