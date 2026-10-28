@@ -1,9 +1,15 @@
-from typing import Tuple, Union, List
+from typing import Optional, Sequence, Tuple, Union, List
 
 import numpy as np
 from fastdtw import fastdtw
 from scipy.spatial import distance as sp_dist
 from scipy.spatial.distance import cdist
+
+
+# Standard steps of dynamic time warping: a cell (n, m) of the accumulated cost
+# matrix can be reached from (n - 1, m - 1), (n - 1, m) and (n, m - 1).
+# Each step is a pair (di, dj): the predecessor of cell (n, m) is (n - di, m - dj).
+DEFAULT_STEP_SIZES: Tuple[Tuple[int, int], ...] = ((1, 1), (1, 0), (0, 1))
 
 
 def pairwise_distance_matrix(
@@ -37,35 +43,85 @@ def pairwise_distance_matrix(
     return C
 
 
-def accumulated_cost_matrix(C: np.ndarray) -> np.ndarray:
+def _check_steps(
+    step_sizes: Optional[Sequence[Tuple[int, int]]],
+    step_weights: Optional[Sequence[float]],
+) -> Tuple[List[Tuple[int, int]], np.ndarray]:
+    """Validate the steps and weights of a dynamic time warping variant"""
+    steps = list(DEFAULT_STEP_SIZES if step_sizes is None else step_sizes)
+    weights = (
+        np.zeros(len(steps)) if step_weights is None else np.asarray(step_weights, float)
+    )
+    if len(weights) != len(steps):
+        raise ValueError("`step_weights` must have one weight per step")
+    for di, dj in steps:
+        if di < 0 or dj < 0 or (di == 0 and dj == 0):
+            raise ValueError(f"Invalid step ({di}, {dj}): steps have to move forward")
+    return steps, weights
+
+
+def accumulated_cost_matrix(
+    C: np.ndarray,
+    step_sizes: Optional[Sequence[Tuple[int, int]]] = None,
+    step_weights: Optional[Sequence[float]] = None,
+) -> np.ndarray:
     """
     Dynamic time warping cost matrix from a pairwise distance matrix
 
     Parameters
     ----------
-    D : double array
+    C : np.ndarray
         Pairwise distance matrix (computed e.g., with `cdist`).
+    step_sizes : sequence of pairs of int (optional)
+        The allowed steps. Each step is a pair (di, dj), which means that
+        cell (n, m) can be reached from cell (n - di, m - dj). The default are
+        the standard steps of DTW, ((1, 1), (1, 0), (0, 1)).
+    step_weights : sequence of float (optional)
+        The cost that is added every time that a step is used (one weight for
+        each step). The default is zero for all the steps.
 
     Returns
     -------
     D : np.ndarray
-        Accumulated cost matrix
+        Accumulated cost matrix. Cells that cannot be reached with the
+        given steps have an infinite cost.
     """
     N = C.shape[0]
     M = C.shape[1]
     D = np.zeros((N, M))
-    D[0, 0] = C[0, 0]
-    for n in range(1, N):
-        D[n, 0] = D[n - 1, 0] + C[n, 0]
-    for m in range(1, M):
-        D[0, m] = D[0, m - 1] + C[0, m]
-    for n in range(1, N):
+    if step_sizes is None and step_weights is None:
+        # Standard DTW
+        D[0, 0] = C[0, 0]
+        for n in range(1, N):
+            D[n, 0] = D[n - 1, 0] + C[n, 0]
         for m in range(1, M):
-            D[n, m] = C[n, m] + min(D[n - 1, m], D[n, m - 1], D[n - 1, m - 1])
+            D[0, m] = D[0, m - 1] + C[0, m]
+        for n in range(1, N):
+            for m in range(1, M):
+                D[n, m] = C[n, m] + min(D[n - 1, m], D[n, m - 1], D[n - 1, m - 1])
+        return D
+
+    # DTW with other steps and (optionally) weights for each step
+    steps, weights = _check_steps(step_sizes, step_weights)
+    D[:] = np.inf
+    D[0, 0] = C[0, 0]
+    for n in range(N):
+        for m in range(M):
+            if n == 0 and m == 0:
+                continue
+            best = np.inf
+            for (di, dj), w in zip(steps, weights):
+                if n - di >= 0 and m - dj >= 0:
+                    best = min(best, D[n - di, m - dj] + w)
+            D[n, m] = C[n, m] + best
     return D
 
 
-def optimal_warping_path(D: np.ndarray) -> np.ndarray:
+def optimal_warping_path(
+    D: np.ndarray,
+    step_sizes: Optional[Sequence[Tuple[int, int]]] = None,
+    step_weights: Optional[Sequence[float]] = None,
+) -> np.ndarray:
     """
     Compute the warping path given an accumulated cost matrix
 
@@ -73,6 +129,10 @@ def optimal_warping_path(D: np.ndarray) -> np.ndarray:
     ----------
     D: np.ndarray
         Accumulated cost Matrix
+    step_sizes : sequence of pairs of int (optional)
+        The steps that were used to compute `D` (see `accumulated_cost_matrix`).
+    step_weights : sequence of float (optional)
+        The weights of the steps that were used to compute `D`.
 
     Returns
     -------
@@ -84,19 +144,35 @@ def optimal_warping_path(D: np.ndarray) -> np.ndarray:
     n = N - 1
     m = M - 1
     P = [(n, m)]
-    while n > 0 or m > 0:
-        if n == 0:
-            cell = (0, m - 1)
-        elif m == 0:
-            cell = (n - 1, 0)
-        else:
-            val = min(D[n - 1, m - 1], D[n - 1, m], D[n, m - 1])
-            if val == D[n - 1, m - 1]:
-                cell = (n - 1, m - 1)
-            elif val == D[n - 1, m]:
-                cell = (n - 1, m)
+    if step_sizes is None and step_weights is None:
+        # Standard DTW
+        while n > 0 or m > 0:
+            if n == 0:
+                cell = (0, m - 1)
+            elif m == 0:
+                cell = (n - 1, 0)
             else:
-                cell = (n, m - 1)
+                val = min(D[n - 1, m - 1], D[n - 1, m], D[n, m - 1])
+                if val == D[n - 1, m - 1]:
+                    cell = (n - 1, m - 1)
+                elif val == D[n - 1, m]:
+                    cell = (n - 1, m)
+                else:
+                    cell = (n, m - 1)
+            P.append(cell)
+            (n, m) = cell
+        P.reverse()
+        return np.array(P)
+
+    # DTW with other steps and (optionally) weights for each step
+    steps, weights = _check_steps(step_sizes, step_weights)
+    if not np.isfinite(D[n, m]):
+        raise ValueError("The last cell cannot be reached with the given steps")
+    while n > 0 or m > 0:
+        best_cost, cell = np.inf, None
+        for (di, dj), w in zip(steps, weights):
+            if n - di >= 0 and m - dj >= 0 and D[n - di, m - dj] + w < best_cost:
+                best_cost, cell = D[n - di, m - dj] + w, (n - di, m - dj)
         P.append(cell)
         (n, m) = cell
     P.reverse()
@@ -108,6 +184,8 @@ def dynamic_time_warping(
     Y: np.ndarray,
     metric: str = "euclidean",
     return_distance: bool = False,
+    step_sizes: Optional[Sequence[Tuple[int, int]]] = None,
+    step_weights: Optional[Sequence[float]] = None,
 ) -> Union[np.ndarray, Tuple[np.ndarray, float]]:
     """
     Naive Implementation of Vanilla Dynamic Time Warping
@@ -123,7 +201,11 @@ def dynamic_time_warping(
         `scipy.spatial.distance`.
     return_distance : bool
        Return the dynamic time warping distance.
-
+    step_sizes : sequence of pairs of int (optional)
+        The allowed steps (see `accumulated_cost_matrix`). The default are the
+        standard steps of DTW.
+    step_weights : sequence of float (optional)
+        The cost of each step. The default is zero for all the steps.
 
     Returns
     -------
@@ -136,10 +218,10 @@ def dynamic_time_warping(
     # Compute pairwise distance matrix
     C = pairwise_distance_matrix(X, Y, metric=metric)
     # Compute accumulated cost matrix
-    D = accumulated_cost_matrix(C)
+    D = accumulated_cost_matrix(C, step_sizes=step_sizes, step_weights=step_weights)
     dtwd = D[-1, -1]
     # Get warping path
-    warping_path = optimal_warping_path(D)
+    warping_path = optimal_warping_path(D, step_sizes=step_sizes, step_weights=step_weights)
 
     if return_distance:
         return warping_path, dtwd
