@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import ipywidgets as widgets
 import numpy as np
 import partitura as pt
+from IPython.display import Image, display
 from matplotlib import lines
 from matplotlib.figure import Figure
 from matplotlib import pyplot as plt
@@ -664,6 +665,11 @@ def figure_to_png(fig: Figure) -> bytes:
     buffer = io.BytesIO()
     fig.savefig(buffer, format="png", dpi=100, bbox_inches="tight")
     return buffer.getvalue()
+
+
+def show_figure(fig: Figure) -> None:
+    """Display a figure that was created without pyplot (e.g., with `matplotlib.figure.Figure`)"""
+    display(Image(data=figure_to_png(fig)))
 
 
 def interactive_figure(

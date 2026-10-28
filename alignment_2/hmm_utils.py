@@ -1,139 +1,62 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+"""
+Utilities for the `score_follower` notebook.
+
+Most of the building blocks (tempo models, feature processors, etc.) come
+from Matchmaker. This module contains
+
+* `BaseHMM`: a simplified base class for the HMMs that we implement in the notebook
+* functions to compute the features of a performance
+* functions to plot and evaluate the score followers
+"""
 import os
-import warnings
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import ipywidgets as widgets
 import numpy as np
-import scipy.spatial.distance as sp_dist
-from hiddenmarkov import (
-    ConstantTransitionModel,
-    HiddenMarkovModel,
-    ObservationModel,
-    TransitionModel,
-)
-from numpy.typing import NDArray
-from scipy.signal import convolve
-from scipy.stats import gumbel_l, norm
-
+import pandas as pd
 import partitura as pt
-from partitura.utils.synth import SAMPLE_RATE
+from hiddenmarkov import HiddenMarkovModel, ObservationModel, TransitionModel
+from IPython.display import display
+from matchmaker.features.midi import compute_features_from_symbolic
+from matchmaker.prob.hmm import compute_chord_matrix, compute_ioi_matrix
+from matchmaker.utils.eval import (
+    TOLERANCES_IN_BEATS,
+    evaluate_alignment,
+    resolve_gt,
+    transfer_positions,
+)
+from matchmaker.utils.misc import interleave_with_constant
+from matchmaker.utils.tempo_models import (  # noqa: F401 (used in the notebook)
+    KalmanTempoModel,
+    LinearTempoModel,
+    MovingAverageTempoModel,
+    ReactiveTempoModel,
+    TempoModel,
+)
+from matplotlib.figure import Figure
+from numpy.typing import NDArray
+from partitura.utils.music import (
+    midi_pitch_to_pitch_spelling,
+    pitch_spelling_to_note_name,
+)
 
-try:
-    import librosa
-    import soundfile as sf
+from helper import interactive_figure  # from the alignment_1 folder
 
-    HAS_LIBROSA = True
-except ImportError:
-    print("Librosa not found! Try installing it with `pip install librosa`")
-
-    HAS_LIBROSA = False
-
-warnings.filterwarnings("ignore")
 # Alias for typing arrays
 NDArrayFloat = NDArray[np.float32]
 NDArrayInt = NDArray[np.int32]
 
-
-class TempoModel(object):
-    """
-    Base class for tempo models.
-
-    Parameters
-    ----------
-    init_beat_period: float
-        Initial tempo in seconds per beat
-    init_score_onset: float
-        Initial score onset time in beats.
-
-    Attributes
-    ----------
-    beat_period : float
-        The current tempo in beats per second
-    prev_score_onset: float
-        Latest covered score onset (in beats)
-    prev_perf_onset : float
-        Last performed onset time in seconds
-    asynchrony : float
-        Asynchrony of the estimated onset time and the actually performed onset time.
-    has_tempo_expectations : bool
-        Whether the model includes tempo expectations
-    counter: int
-        The number of times that the model has been updated. Useful for debugging
-        purposes.
-    """
-
-    beat_period: float
-    prev_score_onset: float
-    prev_perf_onset: float
-    est_onset: float
-    asynchrony: float
-    has_tempo_expectations: bool
-    counter: int
-    score_onsets: np.ndarray
-
-    def __init__(
-        self,
-        init_beat_period: float = 0.5,
-        init_score_onset: float = 0,
-        score_onsets: Optional[np.ndarray] = None,
-    ) -> None:
-        self.beat_period = init_beat_period
-        self.prev_score_onset = init_score_onset
-        self.prev_perf_onset = None
-        self.est_onset = None
-        self.asynchrony = 0.0
-        self.has_tempo_expectations = False
-        self.score_onsets = score_onsets
-        # Count how many times has the tempo model been
-        # called
-        self.counter = 0
-
-    def __call__(
-        self,
-        performed_onset: float,
-        score_onset: float,
-        *args,
-        **kwargs,
-    ) -> Tuple[float, float]:
-        """
-        Update beat period and compute estimated onset time
-
-        Parameters
-        ----------
-        performed_onset : float
-            Latest performed onset
-        score_onset: float
-            Latest score onset corresponding to the performed onset
-
-        Returns
-        -------
-        beat_period : float
-            Tempo in beats per second
-        est_onsete : float
-            Estimated onset given the current beat period
-        """
-        self.update_beat_period(performed_onset, score_onset, *args, **kwargs)
-        self.counter += 1
-        return self.beat_period, self.est_onset
-
-    def update_beat_period(
-        self,
-        performed_onset: float,
-        score_onset: float,
-        *args,
-        **kwargs,
-    ) -> None:
-        """
-        Internal method for updating the beat period.
-        Needs to be implemented for each variant of the model
-        """
-        raise NotImplementedError
+MODEL_COLORS = {"PitchHMM": "firebrick", "PitchIOIHMM": "navy"}
 
 
 class BaseHMM(HiddenMarkovModel):
     """
     Base class for Hidden Markov Model alignment methods.
+
+    (Matchmaker has a `BaseHMM` that also handles the input from a stream, which
+    we do not need here.)
 
     Parameters
     ----------
@@ -198,416 +121,329 @@ class BaseHMM(HiddenMarkovModel):
         return current_state
 
 
-## TEMPO MODELS
-class ReactiveTempoModel(TempoModel):
+## Features
+def compute_pitch_ioi_features(
+    performance: pt.performance.PerformanceLike,
+    polling_period: float = 0.01,
+    piano_range: bool = True,
+) -> List[Optional[Tuple[NDArrayFloat, float]]]:
     """
-    Reactive tempo model.
+    Simulate the real-time input of a performance.
 
-    This sync model computes the tempo as the direct (raw) value of the performed
-    ioi divided by the notated ioi. This method is mostly intended for as a baseline
-    and is generally a poor choice of a tempo model.
-
-    Parameters
-    ----------
-    init_beat_period: float
-        Initial tempo in seconds per beat
-    init_score_onset: float
-        Initial score onset time in beats.
+    The performance is split into frames of `polling_period` seconds. For each frame
+    this returns None if there is no note onset, or the tuple (pitch_obs, ioi_obs) with
+    the pitches of the onsets in the frame (a binary vector) and the
+    inter-onset interval (in seconds) with respect to the previous onset.
     """
+    frames = compute_features_from_symbolic(
+        ref_info=performance,
+        processor_name="pitch",
+        processor_kwargs={"piano_range": piano_range},
+        polling_period=polling_period,
+    )
+    features = []
+    previous_time = None
+    for frame in frames:
+        if frame is None:
+            features.append(None)
+            continue
+        pitch_obs, onset_time = frame
+        # There is no IOI for the first observed note
+        ioi_obs = 0.0 if previous_time is None else onset_time - previous_time
+        previous_time = onset_time
+        features.append((pitch_obs, ioi_obs))
+    return features
 
-    def __init__(
-        self,
-        init_beat_period: float = 0.5,
-        init_score_onset: float = 0.0,
-        update_on_valid_onsets_only: bool = False,
-    ) -> None:
-        super().__init__(
-            init_beat_period=init_beat_period,
-            init_score_onset=init_score_onset,
+
+def run_score_follower(
+    model: BaseHMM,
+    features: List[Optional[Tuple[NDArrayFloat, float]]],
+    polling_period: float = 0.01,
+) -> np.ndarray:
+    """
+    Run a score follower on the features of a performance.
+
+    Returns an array with shape (N, 3) with the columns [frame index, time (s), score position (beats)]
+    """
+    position = model.current_state
+    rows = []
+    for i, feat in enumerate(features):
+        if feat is not None:
+            position = model(feat)
+        rows.append((i, i * polling_period, model.state_space[position]))
+    return np.array(rows)
+
+
+## Plots
+def interactive_pitch_profiles(
+    pitch_profiles: NDArrayFloat, score_onsets: NDArrayFloat
+) -> None:
+    """Slider to look at the pitch profile of each score position"""
+
+    def figure(i):
+        fig = Figure(figsize=(8, 4))
+        ax = fig.subplots()
+        ax.plot(pitch_profiles[i])
+        ax.set_xlabel("Piano key")
+        ax.set_ylabel("Pitch likelihood")
+        ax.set_title(f"Score Position {score_onsets[i]:.2f} beats")
+        return fig
+
+    controls = {
+        "i": widgets.IntSlider(
+            value=0,
+            min=0,
+            max=len(pitch_profiles) - 1,
+            step=1,
+            description="Position",
+            continuous_update=False,  # avoids lag
         )
-        self.update_on_valid_onsets_only = update_on_valid_onsets_only
-
-    def update_beat_period(
-        self,
-        performed_onset: float,
-        score_onset: float,
-        *args,
-        **kwargs,
-    ) -> None:
-        """
-        See documentation in SyncModel above.
-        """
-
-        self.est_onset = performed_onset
-        if self.prev_perf_onset:
-            s_ioi = score_onset - self.prev_score_onset
-            p_ioi = performed_onset - self.prev_perf_onset
-
-            if s_ioi > 0 and p_ioi > 0:
-                self.beat_period = p_ioi / s_ioi
-            else:
-                self.beat_period *= 0.5
-
-        self.prev_score_onset = score_onset
-        self.prev_perf_onset = performed_onset
+    }
+    display(widgets.VBox(list(controls.values())), interactive_figure(figure, controls))
 
 
-class MovingAverageTempoModel(TempoModel):
+def interactive_observation_probabilities(observation_model: ObservationModel) -> None:
+    """Slider to choose a piano key and plot its observation probability for each score position"""
+
+    def figure(key):
+        pitch_obs = np.zeros(88)
+        pitch_obs[key] = 1
+
+        fig = Figure(figsize=(10, 4))
+        ax = fig.subplots()
+        ax.plot(observation_model(pitch_obs))
+        ax.set_xlabel("Frame index")
+        ax.set_ylabel("Observation probability")
+        # Piano keys start at A0 (MIDI pitch 21)
+        ax.set_title(
+            f"Active piano key: "
+            f"{pitch_spelling_to_note_name(*midi_pitch_to_pitch_spelling(key + 21))}"
+        )
+        ax.set_ylim(0, 1)
+        fig.tight_layout()
+        return fig
+
+    controls = {
+        "key": widgets.IntSlider(
+            value=0, min=0, max=87, step=1, description="Key", continuous_update=False
+        )
+    }
+    display(widgets.VBox(list(controls.values())), interactive_figure(figure, controls))
+
+
+def interactive_features(
+    perf_features: List[Optional[Tuple[NDArrayFloat, float]]],
+    observation_probability: Callable[[NDArrayFloat, float], np.ndarray],
+    ylim: Tuple[float, float] = (0, 1),
+) -> None:
     """
-    Moving average tempo model
+    Slider to look at the features of a performance (the onsets), and the
+    observation probability for each score position of each of them.
 
-    This sync model computes the tempo as moving average value of the raw tempo
-    (performed ioi divided by the notated ioi). This method is mostly intended as a
-    baseline and is generally a poor choice of a tempo model.
+    observation_probability: function of the pitch observation and the IOI
+    """
+    # indices of valid (non-None) features
+    valid_idx = [i for i, feat in enumerate(perf_features) if feat is not None]
+
+    # accumulated onsets
+    perf_onsets = np.cumsum([perf_features[i][1] for i in valid_idx])
+
+    def figure(j):
+        i = valid_idx[j]
+        pitch_obs, ioi_obs = perf_features[i]
+
+        fig = Figure(figsize=(10, 6))
+        axes = fig.subplots(2, 1)
+
+        # ---- top: observation probability
+        axes[0].plot(observation_probability(pitch_obs, ioi_obs))
+        axes[0].set_ylabel("Observation probability")
+        axes[0].set_ylim(ylim)
+        axes[0].set_title(f"perf_features[{i}]")
+
+        # ---- bottom: accumulated onset
+        axes[1].scatter(j, perf_onsets[j])
+        axes[1].plot(perf_onsets[: j + 1], marker="o")
+        axes[1].set_xlabel("Feature index")
+        axes[1].set_ylabel("Performed onset (s)")
+        axes[1].grid(True)
+
+        fig.tight_layout()
+        return fig
+
+    controls = {
+        "j": widgets.IntSlider(
+            value=0,
+            min=0,
+            max=len(valid_idx) - 1,
+            step=1,
+            description="Feature",
+            continuous_update=False,
+        )
+    }
+    display(widgets.VBox(list(controls.values())), interactive_figure(figure, controls))
+
+
+def interactive_alignment(alignment: np.ndarray) -> None:
+    """
+    Slider to look at the alignment step by step.
 
     Parameters
     ----------
-    init_beat_period: float
-        Initial tempo in seconds per beat
-    init_score_onset: float
-        Initial score onset time in beats.
-    alpha: float
-        Smoothing factor (must be between 0 and 1).
-        A value closer to 1 changes the MA value very slowly, while a
-        value closer to 0 "forgets" the previous estimate and
-        takes always the most recent value.
-    predict_onset: bool
-        If True, computes the expected next performed onset time using the current
-        tempo estimation. Otherwise, it takes the observed performed onset.
-        This option is for testing purposes.
+    alignment : np.ndarray
+        Shape (N, 3): columns [i, time, position]
     """
+    alignment = np.asarray(alignment)
+    idxs = alignment[:, 0].astype(int)
+    times = alignment[:, 1].astype(float)
+    positions = alignment[:, 2].astype(float)
 
-    alpha: float
-    predict_onset: bool
+    def figure(step):
+        fig = Figure(figsize=(10, 4))
+        ax = fig.subplots()
+        ax.plot(times[: step + 1], positions[: step + 1], lw=2)
+        ax.plot([times[step]], [positions[step]], marker="o")
+        ax.set_xlabel("Time (s)")
+        ax.set_ylabel("Aligned position")
+        ax.set_title(f"Step {step} (i={idxs[step]}, t={times[step]:.3f}s)")
+        fig.tight_layout()
+        return fig
 
-    def __init__(
-        self,
-        init_beat_period: float = 0.5,
-        init_score_onset: float = 0,
-        alpha: float = 0.5,
-        predict_onset: bool = True,
+    controls = {
+        "step": widgets.IntSlider(
+            value=0,
+            min=0,
+            max=len(times) - 1,
+            step=1,
+            description="Step",
+            continuous_update=False,
+        )
+    }
+    display(widgets.VBox(list(controls.values())), interactive_figure(figure, controls))
+
+
+def plot_alignments(alignments: Dict[str, np.ndarray]) -> Figure:
+    """Plot the alignments (position in beats vs. time) of several score followers"""
+    fig = Figure(figsize=(6.4, 4.8))
+    ax = fig.subplots()
+    for name, alignment in alignments.items():
+        ax.plot(
+            alignment[:, 1],
+            alignment[:, 2],
+            color=MODEL_COLORS[name],
+            label=name,
+            linewidth=2,
+        )
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel("Position (beats)")
+    ax.legend()
+    return fig
+
+
+def plot_evaluation(
+    results: Dict[str, dict],
+    alignments: Dict[str, np.ndarray],
+    gt_perf_sec: np.ndarray,
+    gt_score_beat: np.ndarray,
+) -> Figure:
+    """Plot the accuracy for each tolerance and the beat error of the alignments of several score followers"""
+    fig = Figure(figsize=(12, 4))
+    axes = fig.subplots(1, 2)
+
+    # Accuracy for each tolerance
+    width = 0.35
+    x = np.arange(len(TOLERANCES_IN_BEATS))
+    for k, name in enumerate(results):
+        acc = [results[name][f"accuracy_{tau:g}b"] for tau in TOLERANCES_IN_BEATS]
+        axes[0].bar(x + (k - 0.5) * width, acc, width, label=name, color=MODEL_COLORS[name])
+    axes[0].set_xticks(x)
+    axes[0].set_xticklabels([f"{tau:g}" for tau in TOLERANCES_IN_BEATS])
+    axes[0].set_xlabel("Tolerance (beats)")
+    axes[0].set_ylabel("Accuracy")
+    axes[0].set_ylim(0, 1.05)
+    axes[0].legend(loc="lower right")
+
+    # Beat error at each ground truth onset
+    for name, alignment in alignments.items():
+        predicted = transfer_positions(
+            np.array([alignment[:, 1], alignment[:, 2]]),
+            gt_perf_sec,
+            frame_rate=1,
+            domain="score",
+        )
+        axes[1].plot(
+            gt_perf_sec,
+            np.abs(gt_score_beat - predicted),
+            marker="o",
+            markersize=3,
+            label=name,
+            color=MODEL_COLORS[name],
+        )
+    axes[1].set_xlabel("Performance time (s)")
+    axes[1].set_ylabel("Absolute beat error (beats)")
+    axes[1].legend()
+
+    fig.tight_layout()
+    return fig
+
+
+def plot_evaluation_all_performances(
+    results_df: pd.DataFrame, performance_names: List[str]
+) -> Figure:
+    """Bar plots of some of the metrics for each performance and each score follower"""
+    fig = Figure(figsize=(14, 4))
+    axes = fig.subplots(1, 3)
+    x = np.arange(len(performance_names))
+    width = 0.35
+    for ax, metric, ylabel in zip(
+        axes,
+        ["mean_b", "accuracy_0.05b", "smoothness"],
+        ["Mean beat error (beats)", "Accuracy (0.05 beats)", "Smoothness (SPARC)"],
     ):
-        super().__init__(
-            init_beat_period=init_beat_period,
-            init_score_onset=init_score_onset,
+        for k, name in enumerate(MODEL_COLORS):
+            values = results_df[results_df["model"] == name][metric]
+            ax.bar(x + (k - 0.5) * width, values, width, label=name, color=MODEL_COLORS[name])
+        ax.set_xticks(x)
+        ax.set_xticklabels(performance_names, rotation=30)
+        ax.set_ylabel(ylabel)
+    axes[0].legend()
+    fig.tight_layout()
+    return fig
+
+
+## Evaluation
+def evaluate_followers(
+    model_factories: Dict[str, Callable[[], BaseHMM]],
+    performance_names: List[str],
+    score_note_array: np.ndarray,
+    mec_variation_dir: Union[str, os.PathLike],
+    polling_period: float = 0.01,
+) -> pd.DataFrame:
+    """
+    Run score followers on several performances of the mec-variation dataset and evaluate them
+    with Matchmaker's evaluation code.
+
+    model_factories: dictionary of functions that create a (new) score follower
+    """
+    results = []
+    for performance_name in performance_names:
+        match_fn = os.path.join(
+            mec_variation_dir, "alignments", "match", f"{performance_name}.match"
         )
-        self.alpha = alpha
-        self.predict_onset = predict_onset
-
-    def update_beat_period(
-        self,
-        performed_onset: float,
-        score_onset: float,
-        *args,
-        **kwargs,
-    ) -> None:
-        """
-        See documentation in TempoModel above.
-        """
-        if self.prev_perf_onset:
-            s_ioi = score_onset - self.prev_score_onset
-            p_ioi = performed_onset - self.prev_perf_onset
-
-            if s_ioi > 0:
-                beat_period = p_ioi / s_ioi
-            else:
-                beat_period = self.beat_period
-
-            if self.predict_onset:
-                self.est_onset = self.est_onset + self.beat_period * s_ioi
-            else:
-                self.est_onset = performed_onset
-            self.beat_period = (
-                self.alpha * self.beat_period + (1 - self.alpha) * beat_period
+        performance, _ = pt.load_match(match_fn)
+        features = compute_pitch_ioi_features(performance, polling_period)
+        gt_perf_sec, gt_score_beat = resolve_gt(
+            match_fn, score_note_array, performance=performance
+        )
+        for name, factory in model_factories.items():
+            alignment = run_score_follower(factory(), features, polling_period)
+            results.append(
+                {
+                    "performance": performance_name,
+                    "model": name,
+                    **evaluate_alignment(
+                        alignment[:, 2], alignment[:, 1], gt_score_beat, gt_perf_sec
+                    ),
+                }
             )
-        else:
-            self.est_onset = performed_onset
-
-        self.prev_score_onset = score_onset
-        self.prev_perf_onset = performed_onset
-
-
-class KalmanTempoModel(TempoModel):
-    """
-    A Tempo model using a linear Kalman filter.
-    """
-
-    trans_par: float
-    trans_var: float
-    obs_var: float
-    var_est: float
-
-    def __init__(
-        self,
-        init_beat_period: float = 0.5,
-        init_score_onset: float = 0,
-        trans_par: float = 1,
-        trans_var: float = 0.03,
-        obs_var: float = 0.0213,  # values from old ACCompanion
-        init_var: float = 1,
-    ) -> None:
-        super().__init__(
-            init_beat_period=init_beat_period,
-            init_score_onset=init_score_onset,
-        )
-        # Assign the parameters:
-        self.trans_par = trans_par
-        self.trans_var = trans_var
-        self.obs_var = obs_var
-
-        # Assing the initial values:
-        self.var_est = init_var
-
-    # A function to compute one step of the predict-update cycle:
-    def update_beat_period(
-        self,
-        performed_onset: float,
-        score_onset: float,
-        *args,
-        **kwargs,
-    ) -> None:
-        """
-        Updates the model, when a new IOI observation is made. Computes
-        one step of the predict-update cycle in the Kalman Filter.
-
-        Parameters
-        ----------
-        performed_onset: float
-            The latest performed onset
-
-        score_onset : float
-           Latest score onset corresponding to the performed onset
-        """
-
-        if self.counter == 0:
-            score_ioi = 0
-            performed_ioi = 0
-            self.est_onset = performed_onset
-            self.prev_perf_onset = performed_onset
-            self.prev_score_onset = score_onset
-            self.counter += 1
-            return  # skip update on first observation
-        else:
-            performed_ioi = abs(performed_onset - self.prev_perf_onset)
-
-            score_ioi = abs(score_onset - self.prev_score_onset)
-
-        self.prev_score_onset = score_onset
-        self.prev_perf_onset = performed_onset
-        # First, compute the prediction step:
-        period_pred = self.beat_period * self.trans_par
-        var_pred = (self.trans_par**2) * self.var_est + self.trans_var
-
-        # Compute the error (innovation), between the estimation and obs:
-        err = performed_ioi - score_ioi * period_pred
-        # Compute the Kalman gain with the new predictions:
-        kalman_gain = float(var_pred * score_ioi) / (
-            (score_ioi**2) * var_pred + self.obs_var
-        )
-        # Compute the estimations after the update step:
-        self.beat_period = period_pred + kalman_gain * err
-        self.var_est = (1 - kalman_gain * score_ioi) * var_pred
-        self.est_onset += score_ioi * self.beat_period
-        # print("tempo", self.beat_period)
-        self.counter += 1
-
-
-class LinearTempoModel(TempoModel):
-    """
-    Linear synchronization model.
-
-    The sensorimotor synch model to use if there are no tempo expectations.
-
-    Parameters
-    ----------
-    init_beat_period : float
-        Initial beat period in seconds
-    init_score_onset : float
-        Initial score onset in beats (can be negative)
-    eta_t : float
-        Learning rate for the tempo. This parameter serves a similar function
-        to the alpha parameter in the MASM.
-    eta_o : float
-        Learning rate for the onset. This parameter serves a similar function to
-        the alpha parameter in the MASM.
-    """
-
-    eta_t: float
-    eta_p: float
-
-    def __init__(
-        self,
-        init_beat_period: float = 0.5,
-        init_score_onset: float = 0,
-        eta_t: float = 0.3,
-        eta_p: float = 0.7,
-        min_beat_period: float = 0.25,
-        max_beat_period: float = 3,
-    ) -> None:
-        super().__init__(
-            init_beat_period=init_beat_period,
-            init_score_onset=init_score_onset,
-        )
-        self.eta_t = eta_t
-        self.eta_p = eta_p
-        self.min_beat_period = min_beat_period
-        self.max_beat_period = max_beat_period
-
-    def update_beat_period(
-        self,
-        performed_onset: float,
-        score_onset: float,
-        *args,
-        **kwargs,
-    ) -> None:
-        if self.prev_perf_onset:
-            s_ioi = abs(score_onset - self.prev_score_onset)
-            self.est_onset = (
-                self.est_onset + self.beat_period * s_ioi - self.eta_p * self.asynchrony
-            )
-            self.asynchrony = self.est_onset - performed_onset
-
-        else:
-            s_ioi = 0
-            self.est_onset = performed_onset
-
-        tempo_correction_term = (
-            self.asynchrony if self.asynchrony != 0 and s_ioi != 0 else 0
-        )
-
-        self.prev_perf_onset = performed_onset
-        self.prev_score_onset = score_onset
-
-        if tempo_correction_term < 0:
-            beat_period = self.beat_period - self.eta_t * tempo_correction_term
-        else:
-            beat_period = self.beat_period - 2 * self.eta_t * tempo_correction_term
-
-        if beat_period >= self.min_beat_period and beat_period <= self.max_beat_period:
-            self.beat_period = beat_period
-
-
-## Utils
-def interleave_with_constant(
-    array: np.array,
-    constant_row: float = 0,
-) -> np.ndarray:
-    """
-    Interleave a matrix with rows of a constant value.
-
-    Parameters
-    -----------
-    array : np.ndarray
-    """
-    # Determine the shape of the input array
-    num_rows, num_cols = array.shape
-
-    # Create an output array with interleaved rows (double the number of rows)
-    interleaved_array = np.zeros((num_rows * 2, num_cols), dtype=array.dtype)
-
-    # Set the odd rows to the original array and even rows to the constant_row
-    interleaved_array[0::2] = array
-    interleaved_array[1::2] = constant_row
-
-    return interleaved_array
-
-
-def compute_ioi_matrix(
-    unique_onsets: np.ndarray,
-    inserted_states: bool = False,
-) -> np.ndarray:
-    # Construct unique onsets with skips:
-    if inserted_states:
-        unique_onsets_s = np.insert(
-            unique_onsets,
-            np.arange(1, len(unique_onsets)),
-            (unique_onsets[:-1] + 0.5 * np.diff(unique_onsets)),
-        )
-        ioi_matrix = sp_dist.squareform(sp_dist.pdist(unique_onsets_s.reshape(-1, 1)))
-
-    # ... or without skips:
-    else:
-        unique_onsets_s = unique_onsets
-        ioi_matrix = sp_dist.squareform(sp_dist.pdist(unique_onsets.reshape(-1, 1)))
-
-    return ioi_matrix
-
-
-def compute_chord_matrix(chord_pitches: List[NDArrayInt]) -> NDArrayFloat:
-    num_rows = len(chord_pitches)
-    matrix = np.zeros((num_rows, 128), dtype=float)
-
-    # Flatten the chord pitches and create corresponding row indices
-    row_indices = np.repeat(np.arange(num_rows), [len(p) for p in chord_pitches])
-    col_indices = np.concatenate(chord_pitches)
-
-    # Set the specified indices to 1
-    matrix[row_indices, col_indices] = 1
-
-    return matrix
-
-
-
-def save_mixed_audio(
-    audio: Union[np.ndarray, str, os.PathLike],
-    annots: np.ndarray,
-    save_path: Union[str, os.PathLike],
-    sr: int = SAMPLE_RATE,
-):
-    
-    if HAS_LIBROSA:
-        if not isinstance(audio, np.ndarray):
-            audio, _ = librosa.load(audio, sr=sr)
-
-        annots_audio = librosa.clicks(
-            times=annots,
-            sr=sr,
-            click_freq=1000,
-            length=len(audio),
-        )
-        audio_mixed = audio + annots_audio
-        sf.write(str(save_path), audio_mixed, sr, subtype="PCM_24")
-
-
-def transfer_positions(wp, ref_anns, frame_rate, reverse=False):
-    """
-    Transfer the positions of the reference annotations to the target annotations using the warping path.
-    Parameters
-    ----------
-    wp : np.array with shape (2, T)
-        array of warping path.
-        warping_path[0] is the index of the reference (score) feature and warping_path[1] is the index of the target(input) feature.
-    ref_ann : List[float]
-        reference annotations in seconds.
-    frame_rate : int
-        frame rate of the audio.
-
-    Returns
-    -------
-    predicted_targets : np.array with shape (T,)
-        predicted target positions in seconds.
-    """
-    # Causal nearest neighbor interpolation
-    if reverse:
-        x, y = wp[1], wp[0]
-    else:
-        x, y = wp[0], wp[1]
-    ref_anns_frame = np.round(ref_anns * frame_rate)
-    predicted_targets = np.ones(len(ref_anns)) * np.nan
-
-    for i, r in enumerate(ref_anns_frame):
-        # 1) Scan all x values less than or equal to r and find the largest x value
-        past_indices = np.where(x <= r)[0]
-        if past_indices.size > 0:
-            # Find indices corresponding to the largest x value
-            max_x_val = x[past_indices[-1]]
-            max_x_indices = np.where(x == max_x_val)[0]
-
-            # 2) Among all y values mapped to this x value, select the minimum y value
-            corresponding_y_values = y[max_x_indices]
-            min_y_val = np.min(corresponding_y_values)
-
-            # predicted_targets.append(min_y_val)
-            predicted_targets[i] = min_y_val
-
-    return np.array(predicted_targets) / frame_rate
+    return pd.DataFrame(results)
