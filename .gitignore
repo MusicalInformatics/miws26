@@ -225,9 +225,8 @@ Icon?
 .Trashes
 .fseventsd
 
-classification/datasets/
-clasification/pickled*
-classification/*.pth
+symbolic_tasks_I/*/datasets/
+symbolic_tasks_I/*/*.pth
 expectation/*.pth
 generation_dl/*/checkpoint*.pth
 generation_dl/*/GeneratedDrumBeat*.mid
@@ -239,13 +238,19 @@ expectation/train_loss.txt
 expectation/valid_loss.txt
 introduction/CatPerformance.mid
 introduction/CatScore.musicxml
-classification/baseline_submission_key_estimation.csv
+symbolic_tasks_I/*/key_estimation_dataset/
+# Zip files with the datasets of the tasks (the datasets are distributed on the course page)
+symbolic_tasks_I/*/Dataset*.zip
+symbolic_tasks_I/*/Dataset*/
+# Results of the baseline submissions of the challenges
+symbolic_tasks_I/*/baseline_submission*.csv
+symbolic_tasks_I/*/*_results*.csv
+symbolic_tasks_I/*/results_*.csv
 .vscode
 expressive_rendering/my_midi_output.mid
 alignment_2/intro_to_audio_processing.ipynb
 
 # Other course folders: not yet updated for 2026 (remove entries as they are ready)
-classification/
 expectation/
 expressive_rendering/
 generation_EA/
