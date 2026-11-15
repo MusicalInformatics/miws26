@@ -77,13 +77,16 @@ def melody_loss(output: torch.Tensor, target: torch.Tensor, inputs: torch.Tensor
 
 
 def train_model(model, train_data, validation_data, device, max_epochs: int = 200, patience: int = 20,
-                batch_size: int = 100, learning_rate: float = 1.0, seed: int = 0, verbose: bool = True):
+                batch_size: int = 100, learning_rate: float = 1.0, seed: int = 0, verbose: bool = True,
+                checkpoint_path=None):
     """
     Train the model (in place) with early stopping, and restore the weights of the best epoch.
 
     Parameters
     ----------
     train_data, validation_data : tuples (inputs, targets) of windows, as returned by ``pianoroll_windows``
+    checkpoint_path : if given, the best weights so far are saved there after every improvement (so that a long
+        training can be interrupted)
 
     Returns
     -------
@@ -120,6 +123,8 @@ def train_model(model, train_data, validation_data, device, max_epochs: int = 20
         if history["val_loss"][-1] < best_loss:
             best_loss, best_state = history["val_loss"][-1], copy.deepcopy(model.state_dict())
             history["best_epoch"] = epoch
+            if checkpoint_path is not None:
+                torch.save({"state_dict": best_state, "switch": False, "history": history}, checkpoint_path)
         if verbose:
             print(f"Epoch {epoch + 1:3d}: train loss {history['train_loss'][-1]:.4f}, validation loss "
                   f"{history['val_loss'][-1]:.4f} ({time.time() - start_time:.0f} s)"

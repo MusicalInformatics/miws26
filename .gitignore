@@ -226,6 +226,7 @@ Icon?
 .fseventsd
 
 symbolic_tasks_I/*/datasets/
+symbolic_tasks_II/*/datasets/
 symbolic_tasks_I/*/*.pth
 expectation/*.pth
 generation_dl/*/checkpoint*.pth
