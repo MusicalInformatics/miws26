@@ -13,10 +13,12 @@ The folder contains
 
 * `melody_identification.ipynb`: notebook with an introduction to melody identification with a convolutional neural network (CNN) on piano rolls, following the paper of Simonetta et al. (2019). It covers the piano roll representation, the skyline algorithm (a simple baseline), the CNN, the steps to obtain a melody line from the output of the CNN (note probabilities, threshold, and a graph search), and the training of the CNN,
 * `melody_cnn.py`: the CNN, implemented in PyTorch,
-* `melody_utils.py`: helper functions of the notebook (loading the data, piano rolls with Partitura, windows, note probabilities, threshold, graph search, and playback),
+* `melody_utils.py`: helper functions of the notebook (loading the data, piano rolls with Partitura, windows, note probabilities, threshold, graph search, the melody of a piece with the CNN, and playback),
 * `melody_training.py`: the training of the CNN (train/validation/test split, data augmentation, loss, and early stopping),
 * `skyline.py` and `graph_animation.py`: the skyline algorithm and the animations of the notebook,
-* `weights/`: the weights of the CNNs that the authors of the paper trained on the Mozart and the Pop datasets, converted to PyTorch (see the license below), and `convert_theano_weights.py`, the script that converts them.
+* `weights/`: the weights of the CNNs that the authors of the paper trained on the Mozart and the Pop datasets, converted to PyTorch (see the license below), and `convert_theano_weights.py`, the script that converts them. It also has the weights of a CNN that we trained from scratch (`train_melody_id.py`),
+* `Baseline_MelodyIdentification.py`: the baseline submission (the CNN, trained from scratch, with the steps of the paper),
+* `melody_identification_challenge.py`: the code that evaluates the submissions (the F1-score of the melody notes).
 
 ## Teams
 
@@ -24,13 +26,80 @@ You work in teams of **up to 3 people**, and all the members of a team get the s
 
 ## Challenge
 
-The challenge server, the test set, the metric and the baseline submission for this task are **to come**. They will be announced here and on Moodle.
+For this challenge, you have to predict, for each note of the pieces of a test set, whether it is part of the melody, and export your results as a compressed numpy file. You can use **any method that you want** (even if it is not the skyline algorithm or the CNN of the notebook), but your implementation **must use the Partitura library**.
+
+* Your team has to submit to the challenge server **at least once**. The challenge server, with the leaderboard, is at <https://challenges.cp.jku.at/challenge/42/>.
+* There is a leaderboard. Your position on the leaderboard **does not influence your grade**, but the winners of the challenge receive a small prize!
+* If you chose other challenges for your report, you can submit to this one as an extra: you get 20 extra points if you beat the baseline. In this case you do not have to write a report. You only submit your results to the challenge server and upload your code.
 
 ### Dataset
 
-The notebook uses the **Mozart dataset** of the paper: 38 movements of 13 Mozart piano sonatas, in which a professional pianist annotated the main melody line. The first time you run the notebook, it downloads the dataset (4 MB) from the companion repository of the paper (<https://github.com/LIMUNIMI/Symbolic-Melody-Identification>) to the folder `datasets/` of this folder, which is ignored by git. Each piece is a list of notes with the fields `pitch`, `onset` and `duration` (in beats), and `soprano`, which is 1 if the note is part of the melody. The notebook splits the pieces (not the windows of the piano rolls!) into 24 for training, 6 for validation and 8 for testing, as in the code of the paper.
+The notebook uses the **Mozart dataset** of the paper: 38 movements of 13 Mozart piano sonatas, in which a professional pianist annotated the main melody line. You do **not** download the original dataset: the notebook works with the training set of the challenge (below), which you get from Moodle and unzip in the folder `datasets/melody_id_challenge` of this folder (ignored by git). The notebook splits the 29 pieces of the training set by sonata (not the windows of the piano rolls!) into 23 for training and 6 for validation. The 9 pieces of the test set are only evaluated on the challenge server.
+
+For the challenge, the pieces are split by sonata (as in the notebook) and written as csv files. Download the zip file of the dataset from Moodle and unzip it (the folder `datasets/` of this folder is ignored by git, so it is a good place for it). It contains two folders:
+
+* `train`: 29 pieces **with the annotations** of the melody. The name of a file is the Köchel number of the sonata and the movement (e.g., `kv279_1.csv`), so that you can keep the movements of the same sonata together when you split the training set for validation. Each file has one row for each note, with the columns `id` (unique id of the note in the piece), `onset_beat` and `duration_beat` (in beats), `pitch` (MIDI pitch) and `melody` (1 if the note is part of the melody, 0 otherwise). The notes are sorted by onset and then by pitch, and the grace notes (notes with no duration) are not included. The file `melody_identification_train_gt.npz` has the annotations of all the pieces in the format of the submissions (see below).
+* `test`: the 9 movements of the sonatas K. 280, 332 and 457, **without the annotations** (the columns are the same, but there is no `melody` column). The files have anonymous names (`test_000.csv`, ...).
+
+The test set is the test set of the notebook, and the training set is the union of its training and validation sets. **Be careful with the weights of the authors** (`weights/melody_cnn_mozart.pt`): they have seen the test set of the challenge (see the warning in the section on the pre-trained weights below). The weights `melody_cnn_mozart_reproduced.pt` were trained from scratch with the training pieces of the notebook (`train_melody_id.py`), and **not** with the test pieces.
+
+In the following, the location where you unzip the file is called `path_to_the_data_directory`.
+
+### Metric
+
+The submissions are evaluated with the **F1-score of the melody notes** (the higher, the better). For each piece of the test set, we compute the precision and the recall of the notes that are predicted to be melody, and their harmonic mean (the F1-score). The score is the **mean of the F1-scores of the pieces**, so that all the pieces have the same weight, whatever their length. It is a number between 0 and 1. The notes that are not in the submission (an array that is too short) are considered as not melody, and a piece that is not in the submission has an F1-score of 0. The implementation is in `melody_identification_challenge.py`.
+
+### Format of the submission
+
+The submission is a **compressed numpy file** (`.npz`) with an array for each file of the test set. The name of the array is the name of the file without the extension (`test_000`, ...), and the array has one value for each note of the file, **in the order of the rows of the file**: 1 if the note is predicted to be part of the melody, and 0 otherwise.
+
+```python
+import numpy as np
+
+predictions = {
+    "test_000": np.array([0, 1, 1, 0, ...]),  # one value for each row of test_000.csv
+    "test_001": np.array([...]),
+    ...
+}
+np.savez_compressed("results_melody_identification.npz", **predictions)
+```
+
+The file `melody_identification_train_gt.npz` of the training set has the annotations in the same format (an array for each file, named as the file without the extension), so you can evaluate your method locally (for this, your file must have the predictions of the pieces of the training set):
+
+```bash
+python melody_identification_challenge.py --submission your_results.npz --target path_to_the_data_directory/train/melody_identification_train_gt.npz
+```
+
+The score is printed in the terminal.
+
+### Running the baseline
+
+The baseline is the CNN of the notebook, with the weights trained from scratch on the training set (`melody_cnn_mozart_reproduced.pt`), and the steps of the paper to get a melody line (probability of each note, threshold of the clustering, and shortest path in the graph of the notes). To run the baseline submission, run the following commands on the terminal:
+
+```bash
+cd PATH_TO_THE_REPO/symbolic_tasks_II/melody_id
+conda activate miws26
+python Baseline_MelodyIdentification.py -i path_to_the_data_directory -o baseline_results_melody_identification.npz
+```
+
+This evaluates the method on the training set (using the labels; since the CNN was trained on these pieces, the result is optimistic), and generates the file with the predictions for the test set. The baseline reaches a mean F1-score of 0.898 on the training set and **0.847 on the test set**. Upload the npz file to the challenge server to see the score of the baseline.
+
+### Your submission
+
+Your script should be executed in the following way:
+
+```bash
+python TeamName_MelodyIdentification.py -i path_to_the_data_directory -o results_melody_identification.npz
+```
+
+This generates a file with your results (`results_melody_identification.npz`, you can choose whichever name you want). Please upload this file to the [challenge server](https://challenges.cp.jku.at/challenge/42/).
+
+The file `TeamName_MelodyIdentification.py` should be as self-contained as possible, and you can use third-party libraries that are not included in the conda environment of the course. Please follow the example in `Baseline_MelodyIdentification.py`.
 
 ### Pre-trained weights and licenses
+
+> [!WARNING]
+> **The weights of the authors of the paper for the Mozart dataset (`weights/melody_cnn_mozart.pt`) have seen the test set of the challenge.** The authors trained this CNN with **all** the pieces of the Mozart dataset, and the 9 pieces of the test set of the challenge (the sonatas K. 280, 332 and 457) are part of it. Using these weights to predict the test set is therefore a **data leak**: the score is not a fair evaluation of the method (see the criteria of the evaluation in the grading of the report). If you use them, you have to say so in the report, and you should not present the score on the test set as the performance of your method. The weights `melody_cnn_mozart_reproduced.pt` were trained from scratch with the training pieces only (`train_melody_id.py`), so they are safe to use. The weights for the Pop dataset (`melody_cnn_pop.pt`) were not trained with Mozart pieces.
 
 The weights in `weights/` are the ones released by the authors of the paper under the [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) license, converted to PyTorch (see `weights/LICENSE.md`). If you use them, you have to give credit to the authors. The code of this folder is adapted from the code of the paper, which is released under the MIT license (see `LICENSE.md` for the license and for how we adapted the code). The reference is:
 

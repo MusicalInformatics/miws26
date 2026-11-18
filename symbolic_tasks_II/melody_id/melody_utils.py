@@ -11,10 +11,13 @@ note array (pitch, onset, duration, soprano)
     -> CNN (``melody_cnn.MelodyCNN``): melody probability of each pixel
     -> overlap-add of the windows: probability piano roll of the whole piece
     -> probability of each note (median of its pixels) and threshold -> melody notes
+
+``melody_probabilities`` and ``identify_melody`` run the whole pipeline on a piece (without annotations).
 """
 from __future__ import annotations
 
 import bz2
+import csv
 import glob
 import math
 import os
@@ -110,6 +113,43 @@ def get_mozart_dataset(dataset_dir: str, url: str = DATASET_URL) -> list:
     return sorted(glob.glob(os.path.join(mozart_dir, "*.pyc.bz")))
 
 
+def load_challenge_piece(path: str):
+    """
+    Notes of a csv file of the challenge dataset (columns ``id``, ``onset_beat``, ``duration_beat``, ``pitch`` and, in
+    the training set, ``melody``). Returns the list of the note ids and the note array of the dataset (fields
+    ``pitch``, ``onset``, ``duration`` and ``soprano``, which is 0 if the file has no annotations), in the order of
+    the rows of the file.
+    """
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    notes = np.zeros(len(rows), dtype=NOTE_DTYPE)
+    notes["pitch"] = [int(r["pitch"]) for r in rows]
+    notes["onset"] = [float(r["onset_beat"]) for r in rows]
+    notes["duration"] = [float(r["duration_beat"]) for r in rows]
+    notes["soprano"] = [int(r.get("melody") or 0) for r in rows]
+    return [r["id"] for r in rows], notes
+
+
+def load_notes(path: str) -> np.ndarray:
+    """Note array of a piece, from a ``.csv`` file of the challenge dataset or a ``.pyc.bz`` file of the Mozart dataset."""
+    return load_challenge_piece(path)[1] if path.endswith(".csv") else load_piece(path)
+
+
+def get_challenge_files(dataset_dir: str, subset: str = "train") -> list:
+    """
+    Sorted paths of the csv files of the ``train`` (or ``test``) folder of the challenge dataset, which has to be
+    unzipped in ``dataset_dir/melody_id_challenge`` (the zip file is on Moodle).
+    """
+    folder = os.path.join(dataset_dir, "melody_id_challenge", subset)
+    files = sorted(f for f in glob.glob(os.path.join(folder, "*.csv")) if not os.path.basename(f).startswith("."))
+    if not files:
+        raise FileNotFoundError(
+            f"No csv files in {folder}. Download the zip file of the dataset from Moodle and unzip it in "
+            f"{os.path.join(dataset_dir, 'melody_id_challenge')} (it has the folders 'train' and 'test')."
+        )
+    return files
+
+
 # ---------------------------------------------------------------------------
 # Piano rolls
 # ---------------------------------------------------------------------------
@@ -129,6 +169,28 @@ def to_partitura_note_array(note_array: np.ndarray) -> np.ndarray:
     return out
 
 
+def make_score_pianoroll(note_array: np.ndarray, beat_div: int = BEAT_DIV):
+    """
+    Piano roll of the score, computed with partitura (``partitura.utils.compute_pianoroll``). It does not need the
+    annotations of the melody, so it can be used with the pieces of the test set.
+
+    Returns
+    -------
+    score : ndarray (128, n_columns)
+        Binary piano roll with ``beat_div`` pixels per beat. The first column is the onset of the first note.
+    idx : int ndarray (n_notes, 4)
+        Position of each note in the piano roll: (pitch, first column, last column + 1, is melody). The last column is
+        the annotation (``soprano``) of the note array.
+    """
+    notes = to_partitura_note_array(note_array)
+    score, pr_idx = compute_pianoroll(notes, time_unit="beat", time_div=beat_div,
+                                      note_separation=True, return_idxs=True,
+                                      remove_silence=True, binary=True)
+    score = score.toarray().astype(np.float32)
+    idx = np.column_stack([pr_idx[:, 3], pr_idx[:, 1], pr_idx[:, 2], notes["soprano"]]).astype(int)
+    return score, idx
+
+
 def make_pianorolls(note_array: np.ndarray, beat_div: int = BEAT_DIV):
     """
     Piano rolls of the score and of the melody, computed with partitura
@@ -143,12 +205,8 @@ def make_pianorolls(note_array: np.ndarray, beat_div: int = BEAT_DIV):
     idx : int ndarray (n_notes, 4)
         Position of each note in the piano roll: (pitch, first column, last column + 1, is melody).
     """
+    score, idx = make_score_pianoroll(note_array, beat_div)
     notes = to_partitura_note_array(note_array)
-    score, pr_idx = compute_pianoroll(notes, time_unit="beat", time_div=beat_div,
-                                      note_separation=True, return_idxs=True,
-                                      remove_silence=True, binary=True)
-    score = score.toarray().astype(np.float32)
-    idx = np.column_stack([pr_idx[:, 3], pr_idx[:, 1], pr_idx[:, 2], notes["soprano"]]).astype(int)
 
     # melody piano roll: same time axis as the score piano roll
     is_melody = notes["soprano"] == 1
@@ -344,6 +402,26 @@ def monophonic_melody(note_probs: np.ndarray, idx: np.ndarray, threshold: float)
         is_melody[candidates[k]] = True
         k = previous[k]
     return is_melody
+
+
+def melody_probabilities(note_array: np.ndarray, model):
+    """
+    Probability that each note of a piece is part of the melody, with the CNN ``model`` (the piece does not need
+    annotations). Returns the probabilities and ``idx``, the positions of the notes in the piano roll
+    (see ``make_score_pianoroll``).
+    """
+    pianoroll, idx = make_score_pianoroll(note_array)
+    return note_probabilities(predict_pianoroll(model, pianoroll), idx), idx
+
+
+def identify_melody(note_array: np.ndarray, model) -> np.ndarray:
+    """
+    Melody of a piece with the steps of the paper: the probability of each note (``melody_probabilities``), the
+    threshold of the clustering (``cluster_threshold``), and the monophonic melody (``monophonic_melody``).
+    Returns a boolean array with the notes of the melody.
+    """
+    probabilities, idx = melody_probabilities(note_array, model)
+    return monophonic_melody(probabilities, idx, cluster_threshold(probabilities))
 
 
 def note_level_scores(true_labels: np.ndarray, predicted: np.ndarray):

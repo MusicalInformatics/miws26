@@ -35,11 +35,9 @@ from melody_utils import (
     cluster_threshold,
     get_mozart_dataset,
     load_piece,
-    make_pianorolls,
+    melody_probabilities,
     monophonic_melody,
     note_level_scores,
-    note_probabilities,
-    predict_pianoroll,
     to_partitura_note_array,
 )
 from skyline import skyline
@@ -75,9 +73,8 @@ def piece_name(path: str) -> str:
 def evaluate_piece(note_array, model):
     """Note-level (precision, recall, F1) of the skyline and of the CNN with the steps of the paper."""
     piece_notes = to_partitura_note_array(note_array)
-    score, _, idx = make_pianorolls(note_array)
+    probs, idx = melody_probabilities(note_array, model)
     true = piece_notes["soprano"] == 1
-    probs = note_probabilities(predict_pianoroll(model, score), idx)
     threshold = cluster_threshold(probs)
     return {
         "CNN, threshold 0.5": note_level_scores(true, probs >= 0.5),

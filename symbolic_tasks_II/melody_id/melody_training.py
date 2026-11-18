@@ -19,7 +19,9 @@ import numpy as np
 import torch
 from sklearn.model_selection import GroupShuffleSplit
 
-from melody_utils import load_piece, make_pianorolls, split_windows
+from tqdm.auto import tqdm
+
+from melody_utils import load_notes, make_pianorolls, split_windows
 
 
 def split_pieces(files, test_seed: int = 1992, val_seed: int = 34):
@@ -41,7 +43,7 @@ def pianoroll_windows(files):
     """Windows (n, 1, 128, 64) of the piano rolls of the score (inputs) and of the melody (targets), as uint8."""
     inputs, targets = [], []
     for f in files:
-        score, melody, _ = make_pianorolls(load_piece(f))
+        score, melody, _ = make_pianorolls(load_notes(f))
         inputs.append(split_windows(score).astype(np.uint8))
         targets.append(split_windows(melody).astype(np.uint8))
     return np.concatenate(inputs), np.concatenate(targets)
@@ -78,7 +80,7 @@ def melody_loss(output: torch.Tensor, target: torch.Tensor, inputs: torch.Tensor
 
 def train_model(model, train_data, validation_data, device, max_epochs: int = 200, patience: int = 20,
                 batch_size: int = 100, learning_rate: float = 1.0, seed: int = 0, verbose: bool = True,
-                checkpoint_path=None):
+                checkpoint_path=None, progress: bool = True):
     """
     Train the model (in place) with early stopping, and restore the weights of the best epoch.
 
@@ -87,6 +89,7 @@ def train_model(model, train_data, validation_data, device, max_epochs: int = 20
     train_data, validation_data : tuples (inputs, targets) of windows, as returned by ``pianoroll_windows``
     checkpoint_path : if given, the best weights so far are saved there after every improvement (so that a long
         training can be interrupted)
+    progress : show a progress bar (tqdm) over the batches of each epoch, with the running training loss
 
     Returns
     -------
@@ -109,12 +112,17 @@ def train_model(model, train_data, validation_data, device, max_epochs: int = 20
         start_time = time.time()
         model.train()
         train_loss = []
-        for x, y in batches(train_data, rng.permutation(len(train_data[0]))):
+        n_batches = -(-len(train_data[0]) // batch_size)
+        bar = tqdm(batches(train_data, rng.permutation(len(train_data[0]))), total=n_batches, leave=False,
+                   disable=not progress, desc=f"Epoch {epoch + 1}/{max_epochs}")
+        for x, y in bar:
             optimizer.zero_grad()
             loss = melody_loss(model(x), y, x)
             loss.backward()
             optimizer.step()
             train_loss.append(loss.item())
+            bar.set_postfix(loss=f"{np.mean(train_loss):.4f}")
+        bar.close()
         model.eval()
         with torch.no_grad():
             val_loss = [melody_loss(model(x), y, x).item() for x, y in batches(validation_data, np.arange(len(validation_data[0])))]
@@ -126,12 +134,12 @@ def train_model(model, train_data, validation_data, device, max_epochs: int = 20
             if checkpoint_path is not None:
                 torch.save({"state_dict": best_state, "switch": False, "history": history}, checkpoint_path)
         if verbose:
-            print(f"Epoch {epoch + 1:3d}: train loss {history['train_loss'][-1]:.4f}, validation loss "
+            tqdm.write(f"Epoch {epoch + 1:3d}: train loss {history['train_loss'][-1]:.4f}, validation loss "
                   f"{history['val_loss'][-1]:.4f} ({time.time() - start_time:.0f} s)"
                   + (" *" if history["best_epoch"] == epoch else ""))
         if epoch - history["best_epoch"] >= patience:
             if verbose:
-                print(f"No improvement in {patience} epochs: stop.")
+                tqdm.write(f"No improvement in {patience} epochs: stop.")
             break
     model.load_state_dict(best_state)
     model.eval()
