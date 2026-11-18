@@ -226,6 +226,10 @@ Icon?
 .fseventsd
 
 symbolic_tasks_I/*/datasets/
+symbolic_tasks_II/*/datasets/
+symbolic_tasks_II/*/data/
+# development files of the challenge (not part of the repo)
+symbolic_tasks_II/*/challenge_dev/
 symbolic_tasks_I/*/*.pth
 expectation/*.pth
 generation_dl/*/checkpoint*.pth
@@ -246,6 +250,7 @@ symbolic_tasks_I/*/Dataset*/
 symbolic_tasks_I/*/baseline_submission*.csv
 symbolic_tasks_I/*/*_results*.csv
 symbolic_tasks_I/*/results_*.csv
+symbolic_tasks_II/*/*results*.npz
 .vscode
 expressive_rendering/my_midi_output.mid
 alignment_2/intro_to_audio_processing.ipynb
@@ -269,3 +274,16 @@ alignment_1/sonic_visualiser_version*.csv
 alignment_1/youtube_version*.wav
 introduction/example.mid
 alignment_2/results/
+
+# Junk files that macOS/Windows create on exFAT/FAT drives (AppleDouble files ._name, Spotlight, Trash, editor backups)
+.TemporaryItems
+.VolumeIcon.icns
+*~
+System Volume Information/
+$RECYCLE.BIN/
+Thumbs.db
+desktop.ini
+
+# Personal Claude Code settings and notes for this project (not part of the course repository)
+.claude/settings.local.json
+/CLAUDE.md
