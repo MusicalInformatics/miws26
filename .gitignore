@@ -257,7 +257,6 @@ alignment_2/intro_to_audio_processing.ipynb
 
 # Other course folders: not yet updated for 2026 (remove entries as they are ready)
 expectation/
-expressive_rendering/
 generation_EA/
 generation_dl/
 introduction/dev_spectrogram.ipynb
@@ -287,3 +286,10 @@ desktop.ini
 # Personal Claude Code settings and notes for this project (not part of the course repository)
 .claude/settings.local.json
 /CLAUDE.md
+
+# reference clone of jdasam/virtuosoNet (for reading only, not part of the repo)
+expressive_rendering/VirtuosoNet/reference_virtuosoNet/
+
+# not part of the Basis Mixer update yet: rumex will probably be a submodule, VirtuosoNet comes later
+expressive_rendering/rumex/
+expressive_rendering/VirtuosoNet/
