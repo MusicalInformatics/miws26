@@ -26,7 +26,6 @@ import helper.data as data
 
 LOGGER = logging.getLogger(__name__)
 
-OGG_URL_BASE = "https://www.carloscancinochacon.com/documents/other/tmp/"
 PERF_CODEC = pc.PerformanceCodec(pc.TimeCodec(normalization='beat_period_standardized'),
                                  pc.OnsetwiseDecompositionDynamicsCodec())
 
@@ -41,12 +40,24 @@ def show_score(piece):
 
 
 def load_performance_audio(piece, performer):
-    url = "{}{}_{}.ogg".format(OGG_URL_BASE, piece, performer)
+    """Audio of a performance (mono) and its sample rate.
+
+    Uses the local file if it was downloaded (`init_dataset(download_audio=True)`),
+    otherwise streams it from the web (e.g. in Google Colab). Returns (None, None)
+    if neither works.
+    """
+    fn = data.audio_path(piece, performer)
     try:
-        audio, fs = soundfile.read(io.BytesIO(urlopen(url, timeout=15).read()), always_2d=True)
-        audio = audio.mean(1)
-        return audio, fs
-    except:
+        if os.path.exists(fn):
+            audio, fs = soundfile.read(fn, always_2d=True)
+        else:
+            url = "{}{}_{}.ogg".format(data.OGG_URL_BASE, piece, performer)
+            audio, fs = soundfile.read(
+                io.BytesIO(urlopen(url, timeout=15).read()), always_2d=True
+            )
+        return audio.mean(1), fs
+    except Exception as e:
+        LOGGER.warning("Could not load audio of %s %s: %s", piece, performer, e)
         return None, None
 
 
@@ -246,6 +257,12 @@ def performance_player():
         audio, fs = load_performance_audio(piece, performer)
         score_perf_map = show_performance(piece, performer, fig, axs, keep_zoom)
 
+        if audio is None:
+            if aw is None:
+                print("No audio available (no local file and no network). Call init_dataset(download_audio=True) to download it.")
+                aw = display(HTML(""), display_id=True)
+            return
+
         if keep_zoom:
             s, e = axs[0].get_xlim()
             start = max(0, int(score_perf_map(s) * fs))
@@ -307,6 +324,9 @@ def performance_player():
             )
 
         fig.canvas.draw()
+
+        if audio is None:
+            return
 
         start = max(0, int(score_perf_map(play_range[0]) * fs))
         end = min(len(audio), int(score_perf_map(play_range[1]) * fs))

@@ -1,12 +1,10 @@
 {
   "constructor": [
     "basismixer.predictive_models",
-    "RecurrentModel"
+    "FeedForwardModel"
   ],
   "args": {
-    "recurrent_size": 128,
-    "n_layers": 1,
-    "hidden_size": 64,
+    "hidden_size": 128,
     "input_names": [
       "polynomial_pitch_basis.pitch",
       "polynomial_pitch_basis.pitch^2",
@@ -49,10 +47,11 @@
     ],
     "input_size": 38,
     "output_names": [
-      "velocity_trend",
-      "beat_period_standardized"
+      "velocity_dev",
+      "timing",
+      "articulation_log"
     ],
-    "output_size": 2,
-    "input_type": "onsetwise"
+    "output_size": 3,
+    "input_type": "notewise"
   }
 }

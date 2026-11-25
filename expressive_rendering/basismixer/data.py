@@ -11,7 +11,7 @@ import partitura.musicanalysis
 from torch.utils.data import Dataset, ConcatDataset
 
 from partitura import load_score, load_match
-from partitura.score import expand_grace_notes
+from basismixer.score_notes import expand_grace_notes_by_type
 from basismixer.utils import pair_files, get_unique_onset_idxs, notewise_to_onsetwise
 from basismixer.performance_codec import get_performance_codec
 from partitura.performance import PerformedPart
@@ -128,9 +128,9 @@ def process_piece(
         # Remove grace notes
         remove_grace_notes(part)
     else:
-        # expand grace note durations (necessary for correct computation of
-        # targets)
-        expand_grace_notes(part)
+        # expand grace notes according to their type (necessary for correct
+        # computation of targets)
+        expand_grace_notes_by_type(part)
 
     for performance in performances:
         perf_ext = os.path.splitext(performance)[-1]
@@ -312,9 +312,9 @@ def make_datasets(
             # Remove grace notes
             remove_grace_notes(part)
         else:
-            # expand grace note durations (necessary for correct computation of
-            # targets)
-            expand_grace_notes(part)
+            # expand grace notes according to their type (necessary for correct
+            # computation of targets)
+            expand_grace_notes_by_type(part)
 
         # compute the basis functions
         basis, bf_names = make_basis(part, all_basis_functions)

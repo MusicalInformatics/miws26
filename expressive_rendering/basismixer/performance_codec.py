@@ -77,7 +77,15 @@ class PerformanceCodec(object):
             Return the indices of the unique score onsets
         """
 
-        m_score, snote_ids = to_matched_score(part, ppart, alignment)
+        # The performed durations of the Basis Mixer are the ones of the keys (note off), without the
+        # sustain pedal. `to_matched_score` uses `sound_off`, which equals `note_off` for the pedal
+        # threshold 127 (the threshold of the performance is restored afterwards)
+        pedal_threshold = ppart.sustain_pedal_threshold
+        ppart.sustain_pedal_threshold = 127
+        try:
+            m_score, snote_ids = to_matched_score(part, ppart, alignment)
+        finally:
+            ppart.sustain_pedal_threshold = pedal_threshold
 
         # Get time-related parameters
         (time_params, unique_onset_idxs) = self.time_codec.encode(

@@ -11,22 +11,32 @@ import logging
 from IPython.display import display, Audio
 
 from partitura import save_performance_midi, load_musicxml, load_performance_midi
-from partitura.score import expand_grace_notes, unfold_part_maximal
+from partitura.score import unfold_part_maximal
 from partitura.utils.synth import synthesize, SAMPLE_RATE
 from partitura.utils.fluidsynth import HAS_FLUIDSYNTH, synthesize_fluidsynth
 from basismixer.predictive_models import FullPredictiveModel, construct_model
 from basismixer.performance_codec import get_performance_codec
 from basismixer.basisfunctions import make_basis
+from basismixer.data import remove_grace_notes
+from basismixer.score_notes import expand_grace_notes_by_type, remove_double_notes
 
 from helper.predictions import setup_output_directory
 
 LOGGER = logging.getLogger(__name__)
 
+SAMPLE_MODELS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sample_data", "models"
+)
+
 
 def path_to_trained_models(path=setup_output_directory()):
-    if not os.path.exists(path):
+    """Folder of the models trained in notebook 04 (the sample models if there are none)."""
+    has_models = os.path.isdir(path) and any(
+        os.path.isfile(os.path.join(path, f, "best_model.pth")) for f in os.listdir(path)
+    )
+    if not has_models:
         print("Models not found! Using sample models")
-        path = "./sample_data/models"
+        path = SAMPLE_MODELS_DIR
     return path
 
 
@@ -81,7 +91,8 @@ def load_model(models_dir):
     models = []
     for f in os.listdir(models_dir):
         path = os.path.join(models_dir, f)
-        if os.path.isdir(path):
+        # every folder with a model (other folders, e.g. generated performances, are skipped)
+        if os.path.isfile(os.path.join(path, "config.json")):
             model_config = json.load(open(os.path.join(path, "config.json")))
             params = torch.load(
                 os.path.join(path, "best_model.pth"),
@@ -130,6 +141,8 @@ def load_model(models_dir):
         )
     )
 
+    full_model.eval()  # no dropout when making predictions
+
     return full_model, output_names
 
 
@@ -159,11 +172,57 @@ def post_process_predictions(predictions):
     predictions["velocity_trend"][predictions["velocity_trend"] > 0.8] = 0.8
 
 
-def compute_basis_from_xml(xml_fn, input_names):
+def compute_basis_from_xml(
+    xml_fn,
+    input_names,
+    grace_notes="expand",
+    double_notes="remove",
+    grace_offset_quarter=0.25,
+    unfold=True,
+):
+    """
+    Basis functions of a MusicXML score.
+
+    Parameters
+    ----------
+    xml_fn : str
+        MusicXML file.
+    input_names : list
+        Names of the basis functions (columns of the returned matrix).
+    grace_notes : "expand" or "remove"
+        "expand" gives the grace notes a position and a duration in the score according to their type
+        (see `basismixer.score_notes.expand_grace_notes_by_type`), "remove" removes them.
+    double_notes : "remove" or "keep"
+        "remove" removes the notes with the same pitch and onset in different voices (they cannot be
+        played twice, e.g., on a mechanical piano), see `basismixer.score_notes.remove_double_notes`.
+    grace_offset_quarter : float
+        Total duration (in quarter notes) of the grace notes of the same type at an onset.
+    unfold : bool
+        Unfold the repetitions of the score (the notes get new ids). With False the part keeps the note
+        ids of the file, e.g., to compare with the performances aligned to that score.
+
+    Returns
+    -------
+    basis : np.ndarray
+        Array (n_notes, len(input_names)).
+    part : partitura.score.Part
+        The score part (unfolded) that the rows of `basis` refer to.
+    """
+    if grace_notes not in ("expand", "remove"):
+        raise ValueError("`grace_notes` must be 'expand' or 'remove'")
+    if double_notes not in ("remove", "keep"):
+        raise ValueError("`double_notes` must be 'remove' or 'keep'")
+
     # Load MusicXML file
-    part = load_musicxml(xml_fn, force_note_ids=True)[0]
-    expand_grace_notes(part)
-    part = unfold_part_maximal(part)
+    part = load_musicxml(xml_fn, force_note_ids=True if unfold else "keep")[0]
+    if double_notes == "remove":
+        remove_double_notes(part)
+    if grace_notes == "expand":
+        expand_grace_notes_by_type(part, grace_offset_quarter=grace_offset_quarter)
+    else:
+        remove_grace_notes(part)
+    if unfold:
+        part = unfold_part_maximal(part)
 
     # Compute basis functions
     _basis, bf_names = make_basis(

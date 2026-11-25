@@ -290,6 +290,5 @@ desktop.ini
 # reference clone of jdasam/virtuosoNet (for reading only, not part of the repo)
 expressive_rendering/VirtuosoNet/reference_virtuosoNet/
 
-# not part of the Basis Mixer update yet: rumex will probably be a submodule, VirtuosoNet comes later
-expressive_rendering/rumex/
+# not part of the Basis Mixer update yet: VirtuosoNet comes later (rumex is a submodule)
 expressive_rendering/VirtuosoNet/

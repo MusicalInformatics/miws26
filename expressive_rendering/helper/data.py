@@ -26,6 +26,9 @@ DATASET_URL = "https://api.github.com/repos/{}/{}/tarball/{}".format(
 )
 
 TMP_DIR = appdirs.user_cache_dir("basismixer")
+# Audio of the performances (ogg files). They are only downloaded with `init_dataset(download_audio=True)`
+OGG_URL_BASE = "https://www.carloscancinochacon.com/documents/other/tmp/"
+AUDIO_DIR = os.path.join(TMP_DIR, "audio")
 CFG_FILE = os.path.join(TMP_DIR, "cache.json")
 CFG = None
 # DATASET_DIR will be set to the path of our data
@@ -132,7 +135,55 @@ def pair_files(
     return result
 
 
-def init_dataset():
+def audio_path(piece, performer):
+    """Local path of the audio of a performance (the file may not exist, see `download_performance_audio`)."""
+    return os.path.join(AUDIO_DIR, "{}_{}.ogg".format(piece, performer))
+
+
+def download_performance_audio(timeout=30):
+    """
+    Download the audio (ogg) of all the performances of the dataset to `AUDIO_DIR`. Files that
+    are already there are skipped, so it can be run again after a connection error.
+    Returns the list of the files that could not be downloaded.
+    """
+    from tqdm.auto import tqdm
+
+    os.makedirs(AUDIO_DIR, exist_ok=True)
+    missing = []
+    todo = [(pc, pf) for pc in PIECES for pf in PERFORMERS]
+    for piece, performer in tqdm(todo, desc="Audio"):
+        fn = audio_path(piece, performer)
+        if os.path.exists(fn):
+            continue
+        url = "{}{}_{}.ogg".format(OGG_URL_BASE, piece, performer)
+        try:
+            content = urlopen(url, timeout=timeout).read()
+        except (urllib.error.URLError, TimeoutError, OSError):
+            missing.append(os.path.basename(fn))
+            continue
+        # write to a temporary file first, so that an interrupted download is not mistaken for a complete file
+        with open(fn + ".part", "wb") as f:
+            f.write(content)
+        os.replace(fn + ".part", fn)
+    if missing:
+        print("Could not download {} of {} files (run again to retry): {}".format(
+            len(missing), len(todo), ", ".join(missing[:5]) + (", ..." if len(missing) > 5 else "")))
+    else:
+        print("Audio files are in {}".format(AUDIO_DIR))
+    return missing
+
+
+def init_dataset(download_audio=False):
+    """
+    Make sure that the Vienna 4x22 corpus is available and set the global variables
+    `DATASET_DIR`, `PIECES`, `PERFORMERS` and `SCORE_PERFORMANCE_PAIRS`.
+
+    Parameters
+    ----------
+    download_audio : bool
+        If True, also download the audio of the performances (needed to listen to them in
+        `performance_player`) to `AUDIO_DIR`. False by default, so that nothing depends on the network.
+    """
     global DATASET_DIR, PIECES, PERFORMERS, SCORE_PERFORMANCE_PAIRS
 
     load_cfg()
@@ -199,6 +250,9 @@ def init_dataset():
     )
     PIECES = sorted(set(pieces))
     PERFORMERS = sorted(set(performers))
+
+    if download_audio:
+        download_performance_audio()
 
 
 if __name__ == "__main__":

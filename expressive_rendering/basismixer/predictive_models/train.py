@@ -173,6 +173,7 @@ class NNTrainer(ABC):
 
     def train(self):
 
+        print("Training on device:", self.device)
         self.compute_data_stats()
 
         train_loss_name = getattr(self.train_loss, "name", "Train Loss")
@@ -506,6 +507,24 @@ class SupervisedTrainer(NNTrainer):
 
         return np.mean(losses, axis=0), np.mean(
             np.ma.masked_invalid(correlations), axis=0
+        )
+
+
+class StandardizedMSELoss(nn.Module):
+    """MSE of the outputs standardized with the statistics of the training set (`model.out_std`, computed
+    by the trainer). With the plain MSE the outputs with a large variance dominate the loss; here every
+    output has the same weight."""
+
+    name = "standardized MSE"
+
+    def __init__(self, model):
+        super().__init__()
+        # not registered as a submodule: the loss only reads the statistics of the model
+        self._model = [model]
+
+    def __call__(self, predictions, targets):
+        return functional.mse_loss(
+            predictions / self._model[0].out_std, targets / self._model[0].out_std
         )
 
 

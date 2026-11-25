@@ -67,6 +67,7 @@ def construct_model(arch_spec, params=None, device=None):
 
     m.type(torch.float32)
     m.to(default_device() if device is None else device)  # CUDA -> MPS -> CPU
+    print("torch device is", getattr(m, "device", "unknown"))
 
     return m
 
@@ -124,10 +125,45 @@ class FullPredictiveModel(nn.Module):
                 if pn in model.output_names:
                     self.model_param_idxs[pn].append(i)
 
-    def predict(self, x, score_onsets):
+    def predict(self, x, score_onsets, default_values=None, override_model_preds=False):
+        """
+        Predict the expressive parameters of the notes of a score.
 
+        Parameters
+        ----------
+        x : np.ndarray
+            Input features (basis functions), one row per note.
+        score_onsets : np.ndarray
+            Score onset of each note.
+        default_values : dict, optional
+            Values of expressive parameters, e.g. `{"beat_period_mean": 0.5}` (120 beats per minute).
+            They take precedence over `self.default_values` for the parameters that no model
+            predicts. Only for this call (`self.default_values` is not changed).
+        override_model_preds : bool, optional
+            If True, the values given in `default_values` also replace the predictions of the
+            models. The parameters that are not in `default_values` are not affected.
+
+        Returns
+        -------
+        predictions : np.ndarray
+            Structured array with the expressive parameters of each note.
+        """
         if x.ndim != 2:
             raise ValueError("The inputs should be a 2D array")
+
+        given_values = {} if default_values is None else dict(default_values)
+        unknown = set(given_values).difference(self.output_names)
+        if unknown:
+            raise KeyError(
+                "Unknown parameters in `default_values`: {}. The parameters are: {}".format(
+                    sorted(unknown), sorted(str(n) for n in self.output_names)
+                )
+            )
+        if override_model_preds and not given_values:
+            raise ValueError(
+                "`override_model_preds` is True, but there are no `default_values` to use"
+            )
+        fallback_values = {**self.default_values, **given_values}
 
         unique_onset_idxs = get_unique_onset_idxs(score_onsets)
 
@@ -161,7 +197,10 @@ class FullPredictiveModel(nn.Module):
         # or default value
         for pn in self.output_names:
             model_idxs = self.model_param_idxs[pn]
-            if len(model_idxs) > 0:
+            if override_model_preds and pn in given_values:
+                predictions[pn] = np.ones(len(score_onsets)) * given_values[pn]
+
+            elif len(model_idxs) > 0:
                 if self.overlapping_output_strategy == "FIFO":
                     predictions[pn] = _predictions[model_idxs[0]][pn]
 
@@ -171,7 +210,7 @@ class FullPredictiveModel(nn.Module):
                         axis=1,
                     )
             else:
-                predictions[pn] = np.ones(len(score_onsets)) * self.default_values[pn]
+                predictions[pn] = np.ones(len(score_onsets)) * fallback_values[pn]
         return predictions
 
 
@@ -301,8 +340,6 @@ class NNModel(nn.Module, PredictiveModel):
         self.to(device)
         if device is None:
             self.device = torch.device("cpu")  # the trainer (`Trainer.prepare_device`) or `construct_model` move it
-
-        print("torch device is", self.device)
 
     @property
     def dtype(self):

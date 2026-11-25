@@ -1,3 +1,6 @@
 [submodule "vienna4x22"]
 	path = vienna4x22
 	url = https://github.com/CPJKU/vienna4x22
+[submodule "expressive_rendering/rumex"]
+	path = expressive_rendering/rumex
+	url = https://github.com/CarlosCancino-Chacon/rumex.git

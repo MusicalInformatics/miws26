@@ -15,6 +15,7 @@ from basismixer.predictive_models import (
     construct_model as c_model,
     SupervisedTrainer,
     MSELoss,
+    StandardizedMSELoss,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -117,13 +118,23 @@ def train_model(model, train_set, valid_set, config, out_dir):
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     valid_loader = DataLoader(valid_set, batch_size=batch_size, shuffle=False)
 
-    loss = MSELoss()
+    train_args = config["train_args"]
+    # "mse" (default) or "standardized_mse" (all outputs with the same weight)
+    loss_name = train_args.pop("loss", "mse")
+    loss = {"mse": MSELoss, "standardized_mse": lambda: StandardizedMSELoss(model)}[
+        loss_name
+    ]()
 
     ### Construct the optimizer ####
     optim_name, optim_args = config["train_args"]["optimizer"]
     optim = getattr(torch.optim, optim_name)
-    config["train_args"]["optimizer"] = optim(model.parameters(), **optim_args)
-    train_args = config["train_args"]
+    train_args["optimizer"] = optim(model.parameters(), **optim_args)
+    # optional learning rate schedule: ["CosineAnnealingLR", {"T_max": epochs}] (a step per epoch)
+    if train_args.get("lr_scheduler") is not None:
+        name, scheduler_args = train_args["lr_scheduler"]
+        train_args["lr_scheduler"] = getattr(torch.optim.lr_scheduler, name)(
+            train_args["optimizer"], **scheduler_args
+        )
     train_args.pop("seq_len", None)
     trainer = SupervisedTrainer(
         model=model,

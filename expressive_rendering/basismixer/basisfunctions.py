@@ -9,7 +9,6 @@ from scipy.interpolate import interp1d
 import types
 
 import partitura.score as score
-from partitura.utils import ensure_notearray
 
 LOGGER = logging.getLogger(__name__)
 
@@ -146,6 +145,34 @@ def make_basis(
     return basis_data, basis_names
 
 
+def notes_tied_array(part: score.Part) -> np.ndarray:
+    """Basic note information with one row per note, in the order of `part.notes_tied`.
+
+    All basis functions (and the targets and the decoding of the performance) use this order. It is NOT
+    the order of `part.note_array()`, which is sorted.
+
+    Returns a structured array with the fields `pitch`, `onset_div`, `onset_beat` and `duration_beat`.
+    """
+    notes = part.notes_tied
+    onset_div = np.array([n.start.t for n in notes], dtype=int)
+    end_div = np.array([n.start.t + n.duration_tied for n in notes], dtype=int)
+    bm = part.beat_map
+    na = np.zeros(
+        len(notes),
+        dtype=[
+            ("pitch", "i4"),
+            ("onset_div", "i4"),
+            ("onset_beat", "f4"),
+            ("duration_beat", "f4"),
+        ],
+    )
+    na["pitch"] = [n.midi_pitch for n in notes]
+    na["onset_div"] = onset_div
+    na["onset_beat"] = bm(onset_div)
+    na["duration_beat"] = bm(end_div) - bm(onset_div)
+    return na
+
+
 def polynomial_pitch_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
     """Polynomial pitch basis.
 
@@ -158,7 +185,7 @@ def polynomial_pitch_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
 
     basis_names = ["pitch", "pitch^2", "pitch^3"]
     max_pitch = 127
-    pitches = ensure_notearray(part)["pitch"].astype(float)
+    pitches = notes_tied_array(part)["pitch"].astype(float)
     W = np.column_stack(
         (pitches / max_pitch, pitches**2 / max_pitch**2, pitches**3 / max_pitch**3)
     )
@@ -197,7 +224,7 @@ def onset_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
     """
     basis_names = ["onset", "score_position"]
 
-    onsets_beat = ensure_notearray(part)["onset_beat"]
+    onsets_beat = notes_tied_array(part)["onset_beat"]
     rel_position = normalize(onsets_beat, method="minmax")
 
     W = np.column_stack((onsets_beat, rel_position))
@@ -224,15 +251,13 @@ def grace_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
 
     basis_names = ["grace_note", "n_grace", "grace_pos"]
 
-    notes = ensure_notearray(part)
+    notes = notes_tied_array(part)
     W = np.zeros((len(notes), 3))
     for i, n in enumerate(notes):
         if n["duration_beat"] == 0:
             n_grace = np.where(
                 (notes["onset_beat"] == n["onset_beat"]) & (notes["duration_beat"] == 0)
             )[0].shape[0]
-            # or
-            # n_grace = np.nonzero(ensure_notearray(part, include_grace_notes=True)["is_grace"])
             W[i, 0] = 1
             W[i, 1] = n_grace
             # W[i, 2] = n_grace - sum(1 for _ in n.iter_grace_seq()) + 1
@@ -258,7 +283,7 @@ def loudness_direction_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
 
     """
 
-    onsets = ensure_notearray(part)["onset_div"]
+    onsets = notes_tied_array(part)["onset_div"]
     N = len(onsets)
 
     directions = list(part.iter_all(score.LoudnessDirection, include_subclasses=True))
@@ -299,7 +324,7 @@ def tempo_direction_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
     * adagio : directions like 'adagio', 'molto adagio'
 
     """
-    onsets = ensure_notearray(part)["onset_div"]
+    onsets = notes_tied_array(part)["onset_div"]
     N = len(onsets)
 
     directions = list(part.iter_all(score.TempoDirection, include_subclasses=True))
@@ -334,7 +359,7 @@ def tempo_direction_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
 
 def articulation_direction_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
     """ """
-    onsets = ensure_notearray(part)["onset_div"]
+    onsets = notes_tied_array(part)["onset_div"]
     N = len(onsets)
 
     directions = list(
@@ -448,7 +473,7 @@ def slur_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
 
     """
     names = ["slur_incr", "slur_decr"]
-    onsets = ensure_notearray(part)["onset_div"]
+    onsets = notes_tied_array(part)["onset_div"]
     slurs = part.iter_all(score.Slur)
     W = np.zeros((len(onsets), 2))
 
@@ -535,7 +560,7 @@ def fermata_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
 
     """
     names = ["fermata"]
-    onsets = ensure_notearray(part)["onset_div"]
+    onsets = notes_tied_array(part)["onset_div"]
     W = np.zeros((len(onsets), 1))
     for ferm in part.iter_all(score.Fermata):
         W[onsets == ferm.start.t, 0] = 1
@@ -612,7 +637,7 @@ def metrical_strength_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
     W = np.zeros((len(notes), len(names)))
     for i, n in enumerate(notes):
 
-        beats, beat_type = ts_map(n.start.t).astype(int)
+        beats, beat_type = ts_map(n.start.t).astype(int)[:2]
         measure = next(n.start.iter_prev(score.Measure, eq=True), None)
 
         if beats == 4:
@@ -654,7 +679,7 @@ def time_signature_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
     a one hot encoding of number of beats and a one hot encoding of beat type
     """
 
-    notes = ensure_notearray(part)
+    notes = part.notes_tied
     ts_map = part.time_signature_map
     possible_beats = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, "other"]
     possible_beat_types = [1, 2, 4, 8, 16, "other"]
@@ -666,7 +691,7 @@ def time_signature_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
     ]
 
     for i, n in enumerate(notes):
-        beats, beat_type = ts_map(n["onset_div"]).astype(int)
+        beats, beat_type = ts_map(n.start.t).astype(int)[:2]
 
         if beats in possible_beats:
             W_beats[i, beats - 1] = 1
@@ -707,7 +732,7 @@ def vertical_neighbor_basis(part: score.Part) -> Tuple[np.ndarray, List[str]]:
         "pitch_range",
     ]
     # notes
-    notes = ensure_notearray(part)
+    notes = notes_tied_array(part)
 
     W = np.empty((len(notes), len(names)))
     for i, n in enumerate(notes):
